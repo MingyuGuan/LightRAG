@@ -1,0 +1,17 @@
+[
+    {
+      "result": "Python and JavaScript differ in several key aspects: 1) Python is primarily used for backend development while JavaScript was originally created for frontend web development 2) Python uses indentation for code blocks while JavaScript uses curly braces 3) Python is strongly typed while JavaScript is loosely typed 4) Python has better support for data science and machine learning libraries 5) JavaScript has more robust frontend frameworks and libraries"
+    },
+    {
+      "result": "Garbage collection in modern programming languages automatically manages memory by identifying and freeing memory that is no longer being used by the program. Most languages use mark-and-sweep or reference counting algorithms. The garbage collector periodically scans memory to find unreferenced objects and reclaims that space."
+    },
+    {
+      "result": "Microservices architecture breaks down applications into small, independent services. Benefits include: scalability, technology flexibility, easier deployment. Drawbacks include: increased complexity in service coordination, potential network latency, more challenging debugging across services."
+    },
+    {
+      "result": "Dependency injection is a design pattern where objects receive their dependencies from external sources rather than creating them internally. This promotes loose coupling, easier testing through mocking, and better separation of concerns. It's particularly useful in large applications where managing dependencies manually would be complex."
+    },
+    {
+      "result": "REST APIs use standard HTTP methods and URLs to interact with resources, while GraphQL provides a query language that allows clients to request specific data. REST typically requires multiple endpoints for different data needs, while GraphQL uses a single endpoint where clients can specify exactly what data they want."
+    }
+  ]

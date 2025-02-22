@@ -1,0 +1,5 @@
+- Question 1: What are the key differences between Python and JavaScript?
+- Question 2: How does garbage collection work in modern programming languages?
+- Question 3: What are the benefits and drawbacks of microservices architecture?
+- Question 4: Explain the concept of dependency injection and its advantages.
+- Question 5: What is the difference between REST and GraphQL APIs?

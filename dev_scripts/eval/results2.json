@@ -1,0 +1,17 @@
+[
+    {
+      "result": "The main differences between Python and JavaScript include their execution environments (Python runs server-side, JS primarily client-side), syntax (Python emphasizes readability with significant whitespace, JS uses C-style syntax), type systems (Python is dynamically typed but strict, JS is more flexible), and typical use cases (Python excels in data analysis and backend, JS dominates web development)."
+    },
+    {
+      "result": "Modern garbage collection involves automatic memory management through various algorithms. Common approaches include generational collection (separating objects by age), concurrent collection (running alongside program execution), and incremental collection (breaking collection into smaller steps). This prevents memory leaks and reduces manual memory management burden."
+    },
+    {
+      "result": "Microservices architecture divides applications into independently deployable services. Advantages: improved scalability, easier maintenance, technology diversity, and faster deployment cycles. Disadvantages: distributed system complexity, service communication overhead, data consistency challenges, and increased operational complexity in monitoring and debugging."
+    },
+    {
+      "result": "Dependency injection is a software design principle where components explicitly declare their dependencies instead of creating them. This approach enhances code modularity, simplifies unit testing, improves code reusability, and makes the system more maintainable. It's commonly implemented through constructor injection, setter injection, or interface injection."
+    },
+    {
+      "result": "REST and GraphQL represent different approaches to API design. REST follows a resource-based architecture with fixed endpoints and HTTP methods, making it simple and cacheable. GraphQL offers a more flexible query language where clients can request precise data structures, reducing over-fetching but potentially increasing server complexity."
+    }
+  ]
