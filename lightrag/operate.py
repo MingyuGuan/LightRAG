@@ -148,7 +148,6 @@ async def _handle_single_entity_extraction(
         source_id=entity_source_id,
     )
 
-
 async def _handle_single_relationship_extraction(
     record_attributes: list[str],
     chunk_key: str,
@@ -175,6 +174,45 @@ async def _handle_single_relationship_extraction(
         metadata={"created_at": time.time()},
     )
 
+# graphloom
+async def _handle_single_theme_extraction(
+    record_attributes: list[str],
+    chunk_key: str,
+):
+    if len(record_attributes) < 4 or record_attributes[0] != '"theme"':
+        return None
+    theme_name = clean_str(record_attributes[1].upper())
+    theme_description = clean_str(record_attributes[2])
+    theme_entities = clean_str(record_attributes[3])
+    theme_source_id = chunk_key
+    return dict(
+        theme_name=theme_name,
+        description=theme_description,
+        entities=theme_entities,
+        source_id=theme_source_id,
+    )
+
+# graphloom
+async def _handle_single_theme_hierarchy_extraction(
+    record_attributes: list[str],
+    chunk_key: str,
+):
+    if len(record_attributes) < 4 or record_attributes[0] != '"theme_hierarchy"':
+        return None
+    parent_name = clean_str(record_attributes[1].upper())
+    child_name = clean_str(record_attributes[2].upper())
+    theme_hierarchy_description = clean_str(record_attributes[3])
+    theme_hierarchy_source_id = chunk_key
+    weight = (
+        float(record_attributes[-1]) if is_float_regex(record_attributes[-1]) else 1.0
+    )
+    return dict(
+        parent_name=parent_name,
+        child_name=child_name,
+        description=theme_hierarchy_description,
+        source_id=theme_hierarchy_source_id,
+        weight=weight,
+    )
 
 async def _merge_nodes_then_upsert(
     entity_name: str,
@@ -321,6 +359,416 @@ async def _merge_edges_then_upsert(
 
     return edge_data
 
+# graphloom
+async def _merge_themes_then_upsert(
+    theme_name: str,
+    themes_data: list[dict],
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict,
+):
+    already_source_ids = []
+    already_description = []
+    already_entities = []
+
+    already_theme = await knowledge_graph_inst.get_node(theme_name)
+    if already_theme is not None:
+        already_source_ids.extend(
+            split_string_by_multi_markers(already_theme["source_id"], [GRAPH_FIELD_SEP])
+        )
+        already_description.append(already_theme["description"])
+        already_entities.extend(
+            split_string_by_multi_markers(already_theme["entities"], [GRAPH_FIELD_SEP])
+        ) 
+    
+    description = GRAPH_FIELD_SEP.join(
+        sorted(set([dp["description"] for dp in themes_data] + already_description))
+    )
+    entities = GRAPH_FIELD_SEP.join(
+        sorted(set([dp["entities"] for dp in themes_data] + already_entities))
+    )
+    source_id = GRAPH_FIELD_SEP.join(
+        set([dp["source_id"] for dp in themes_data] + already_source_ids)
+    )
+    description = await _handle_entity_relation_summary(
+        theme_name, description, global_config
+    )
+    theme_data = dict(
+        theme_name=theme_name,
+        description=description,
+        entities=entities,
+        source_id=source_id,
+    )
+    await knowledge_graph_inst.upsert_node(
+        theme_name,
+        node_data=theme_data,
+    )
+    theme_data["theme_name"] = theme_name
+    return theme_data
+
+# graphloom
+async def _merge_theme_hierarchies_then_upsert(
+    parent_name: str,
+    child_name: str,
+    theme_hierarchies_data: list[dict],
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict,
+):
+    already_source_ids = []
+    already_description = []
+    already_weight = []
+    already_theme_hierarchy = await knowledge_graph_inst.get_edge(parent_name, child_name)
+    if already_theme_hierarchy is not None:
+        already_source_ids.extend(
+            split_string_by_multi_markers(already_theme_hierarchy["source_id"], [GRAPH_FIELD_SEP])
+        )
+        already_description.append(already_theme_hierarchy["description"])
+        already_weight.append(already_theme_hierarchy["weight"])
+
+    weight = sum([dp["weight"] for dp in theme_hierarchies_data] + already_weight)
+    description = GRAPH_FIELD_SEP.join(
+        sorted(set([dp["description"] for dp in theme_hierarchies_data] + already_description))
+    )   
+    source_id = GRAPH_FIELD_SEP.join(
+        set([dp["source_id"] for dp in theme_hierarchies_data] + already_source_ids)
+    )
+    description = await _handle_entity_relation_summary(
+        f"({parent_name}, {child_name})", description, global_config
+    )
+    await knowledge_graph_inst.upsert_edge(
+        parent_name,
+        child_name,
+        edge_data=dict(
+            weight=weight,
+            description=description,
+            source_id=source_id,
+        ),
+    )
+
+    theme_hierarchy_data = dict(
+        parent_name=parent_name,
+        child_name=child_name,
+        description=description,
+        source_id=source_id,
+        weight=weight,
+    )
+
+    return theme_hierarchy_data
+
+# graphloom
+async def extract_kg(
+    chunks: dict[str, TextChunkSchema],
+    knowledge_graph_inst: BaseGraphStorage,
+    entity_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    theme_vdb: BaseVectorStorage,
+    theme_hierarchy_vdb: BaseVectorStorage,
+    global_config: dict[str, str],
+    llm_response_cache: BaseKVStorage | None = None,
+) -> None:
+    use_llm_func: callable = global_config["llm_model_func"]
+    entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
+    enable_llm_cache_for_entity_extract: bool = global_config[
+        "enable_llm_cache_for_entity_extract"
+    ]
+
+    ordered_chunks = list(chunks.items())
+    # add language and example number params to prompt
+    language = global_config["addon_params"].get(
+        "language", PROMPTS["DEFAULT_LANGUAGE"]
+    )
+    entity_types = global_config["addon_params"].get(
+        "entity_types", PROMPTS["DEFAULT_ENTITY_TYPES"]
+    )
+    example_number = global_config["addon_params"].get("example_number", None)
+    if example_number and example_number < len(PROMPTS["kg_extraction_examples"]):
+        examples = "\n".join(
+            PROMPTS["kg_extraction_examples"][: int(example_number)]
+        )
+    else:
+        examples = "\n".join(PROMPTS["kg_extraction_examples"])
+
+    example_context_base = dict(
+        tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+        record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
+        completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+        entity_types=",".join(entity_types),
+        language=language,
+    )
+    # add example's format
+    examples = examples.format(**example_context_base)
+
+    kg_extract_prompt = PROMPTS["kg_extraction"]
+    context_base = dict(
+        tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+        record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
+        completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+        entity_types=",".join(entity_types),
+        examples=examples,
+        language=language,
+    )
+
+    continue_prompt = PROMPTS["entiti_continue_extraction"]
+    if_loop_prompt = PROMPTS["entiti_if_loop_extraction"]
+
+    already_processed = 0
+    already_entities = 0
+    already_relations = 0
+    already_themes = 0
+    already_theme_hierarchies = 0
+
+    async def _user_llm_func_with_cache(
+        input_text: str, history_messages: list[dict[str, str]] = None
+    ) -> str:
+        if enable_llm_cache_for_entity_extract and llm_response_cache:
+            if history_messages:
+                history = json.dumps(history_messages, ensure_ascii=False)
+                _prompt = history + "\n" + input_text
+            else:
+                _prompt = input_text
+
+            arg_hash = compute_args_hash(_prompt)
+            cached_return, _1, _2, _3 = await handle_cache(
+                llm_response_cache,
+                arg_hash,
+                _prompt,
+                "default",
+                cache_type="extract",
+                force_llm_cache=True,
+            )
+            if cached_return:
+                logger.debug(f"Found cache for {arg_hash}")
+                statistic_data["llm_cache"] += 1
+                return cached_return
+            statistic_data["llm_call"] += 1
+            if history_messages:
+                res: str = await use_llm_func(
+                    input_text, history_messages=history_messages
+                )
+            else:
+                res: str = await use_llm_func(input_text)
+            await save_to_cache(
+                llm_response_cache,
+                CacheData(
+                    args_hash=arg_hash,
+                    content=res,
+                    prompt=_prompt,
+                    cache_type="extract",
+                ),
+            )
+            return res
+
+        if history_messages:
+            return await use_llm_func(input_text, history_messages=history_messages)
+        else:
+            return await use_llm_func(input_text)
+
+    async def _process_single_content(chunk_key_dp: tuple[str, TextChunkSchema]):
+        """ "Prpocess a single chunk
+        Args:
+            chunk_key_dp (tuple[str, TextChunkSchema]):
+                ("chunck-xxxxxx", {"tokens": int, "content": str, "full_doc_id": str, "chunk_order_index": int})
+        """
+        nonlocal already_processed, already_entities, already_relations, already_themes, already_theme_hierarchies
+        chunk_key = chunk_key_dp[0]
+        chunk_dp = chunk_key_dp[1]
+        content = chunk_dp["content"]
+        # hint_prompt = entity_extract_prompt.format(**context_base, input_text=content)
+        hint_prompt = kg_extract_prompt.format(
+            **context_base, input_text="{input_text}"
+        ).format(**context_base, input_text=content)
+
+        final_result = await _user_llm_func_with_cache(hint_prompt)
+        history = pack_user_ass_to_openai_messages(hint_prompt, final_result)
+        for now_glean_index in range(entity_extract_max_gleaning):
+            glean_result = await _user_llm_func_with_cache(
+                continue_prompt, history_messages=history
+            )
+
+            history += pack_user_ass_to_openai_messages(continue_prompt, glean_result)
+            final_result += glean_result
+            if now_glean_index == entity_extract_max_gleaning - 1:
+                break
+
+            if_loop_result: str = await _user_llm_func_with_cache(
+                if_loop_prompt, history_messages=history
+            )
+            if_loop_result = if_loop_result.strip().strip('"').strip("'").lower()
+            if if_loop_result != "yes":
+                break
+
+        records = split_string_by_multi_markers(
+            final_result,
+            [context_base["record_delimiter"], context_base["completion_delimiter"]],
+        )
+
+        maybe_nodes = defaultdict(list)
+        maybe_edges = defaultdict(list)
+        maybe_themes = defaultdict(list)
+        maybe_theme_hierarchies = defaultdict(list)
+        for record in records:
+            record = re.search(r"\((.*)\)", record)
+            if record is None:
+                continue
+            record = record.group(1)
+            record_attributes = split_string_by_multi_markers(
+                record, [context_base["tuple_delimiter"]]
+            )
+            if_entities = await _handle_single_entity_extraction(
+                record_attributes, chunk_key
+            )
+            if if_entities is not None:
+                maybe_nodes[if_entities["entity_name"]].append(if_entities)
+                continue
+
+            if_relation = await _handle_single_relationship_extraction(
+                record_attributes, chunk_key
+            )
+            if if_relation is not None:
+                maybe_edges[(if_relation["src_id"], if_relation["tgt_id"])].append(
+                    if_relation
+                )
+            
+            if_theme = await _handle_single_theme_extraction(
+                record_attributes, chunk_key
+            )
+            if if_theme is not None:
+                maybe_themes[if_theme["theme_name"]].append(if_theme)
+                continue    
+            
+            if_theme_hierarchy = await _handle_single_theme_hierarchy_extraction(
+                record_attributes, chunk_key
+            )
+            if if_theme_hierarchy is not None:
+                maybe_theme_hierarchies[(if_theme_hierarchy["parent_name"], if_theme_hierarchy["child_name"])].append(if_theme_hierarchy)
+                continue
+            
+        already_processed += 1
+        already_entities += len(maybe_nodes)
+        already_relations += len(maybe_edges)
+        already_themes += len(maybe_themes)
+        already_theme_hierarchies += len(maybe_theme_hierarchies)
+
+        logger.debug(
+            f"Processed {already_processed} chunks, {already_entities} entities(duplicated), {already_relations} relations(duplicated), {already_themes} themes(duplicated), {already_theme_hierarchies} theme_hierarchies(duplicated)\r",
+        )
+        return dict(maybe_nodes), dict(maybe_edges), dict(maybe_themes), dict(maybe_theme_hierarchies)
+
+    tasks = [_process_single_content(c) for c in ordered_chunks]
+    results = await asyncio.gather(*tasks)
+
+    maybe_nodes = defaultdict(list)
+    maybe_edges = defaultdict(list)
+    maybe_themes = defaultdict(list)
+    maybe_theme_hierarchies = defaultdict(list)
+    for m_nodes, m_edges, m_themes, m_theme_hierarchies in results:
+        for k, v in m_nodes.items():
+            maybe_nodes[k].extend(v)
+        for k, v in m_edges.items():
+            maybe_edges[tuple(sorted(k))].extend(v)
+        for k, v in m_themes.items():
+            maybe_themes[k].extend(v)
+        for k, v in m_theme_hierarchies.items():
+            maybe_theme_hierarchies[tuple(sorted(k))].extend(v)
+
+    all_entities_data = await asyncio.gather(
+        *[
+            _merge_nodes_then_upsert(k, v, knowledge_graph_inst, global_config)
+            for k, v in maybe_nodes.items()
+        ]
+    )
+
+    all_relationships_data = await asyncio.gather(
+        *[
+            _merge_edges_then_upsert(k[0], k[1], v, knowledge_graph_inst, global_config)
+            for k, v in maybe_edges.items()
+        ]
+    )
+
+    all_themes_data = await asyncio.gather(
+        *[
+            _merge_themes_then_upsert(k, v, knowledge_graph_inst, global_config)
+            for k, v in maybe_themes.items()
+        ]
+    )
+
+    all_theme_hierarchies_data = await asyncio.gather(
+        *[
+            _merge_theme_hierarchies_then_upsert(k[0], k[1], v, knowledge_graph_inst, global_config)
+            for k, v in maybe_theme_hierarchies.items()
+        ]
+    )
+    
+    if not (all_entities_data or all_relationships_data or all_themes_data or all_theme_hierarchies_data):
+        logger.info("Didn't extract any data (entities, relationships, themes, or theme hierarchies).")
+        return
+
+    # Log missing data types
+    missing_types = []
+    if not all_entities_data:
+        missing_types.append("entities")
+    if not all_relationships_data:
+        missing_types.append("relationships")
+    if not all_themes_data:
+        missing_types.append("themes")
+    if not all_theme_hierarchies_data:
+        missing_types.append("theme hierarchies")
+
+    if missing_types:
+        logger.info(f"Didn't extract any {', '.join(missing_types)}")
+
+    logger.info(
+        f"New data extracted: entities:{all_entities_data}, relationships:{all_relationships_data}, "
+        f"themes:{all_themes_data}, theme_hierarchies:{all_theme_hierarchies_data}"
+    )
+
+    if entity_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
+                "content": dp["entity_name"] + dp["description"],
+                "entity_name": dp["entity_name"],
+            }
+            for dp in all_entities_data
+        }
+        await entity_vdb.upsert(data_for_vdb)
+
+    if relationships_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["src_id"] + dp["tgt_id"], prefix="rel-"): {
+                "src_id": dp["src_id"],
+                "tgt_id": dp["tgt_id"],
+                "content": dp["keywords"]
+                + dp["src_id"]
+                + dp["tgt_id"]
+                + dp["description"],
+                "metadata": {
+                    "created_at": dp.get("metadata", {}).get("created_at", time.time())
+                },
+            }
+            for dp in all_relationships_data
+        }
+        await relationships_vdb.upsert(data_for_vdb)
+
+    if theme_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["theme_name"], prefix="the-"): {
+                "content": dp["theme_name"] + dp["description"],
+                "theme_name": dp["theme_name"],
+                "entities": dp["entities"],
+            }
+            for dp in all_themes_data
+        }
+        await theme_vdb.upsert(data_for_vdb)
+
+    if theme_hierarchy_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["parent_name"] + dp["child_name"], prefix="the-hrc-"): {
+                "content": dp["parent_name"] + dp["child_name"] + dp["description"],
+                "parent_name": dp["parent_name"],
+                "child_name": dp["child_name"],
+            }
+            for dp in all_theme_hierarchies_data
+        }
+        await theme_hierarchy_vdb.upsert(data_for_vdb)
 
 async def extract_entities(
     chunks: dict[str, TextChunkSchema],

@@ -29,6 +29,7 @@ from .namespace import NameSpace, make_namespace
 from .operate import (
     chunking_by_token_size,
     extract_entities,
+    extract_kg,
     extract_keywords_only,
     kg_query,
     kg_query_with_keywords,
@@ -262,6 +263,10 @@ class LightRAG:
 
     _storages_status: StoragesStatus = field(default=StoragesStatus.NOT_CREATED)
 
+    
+    graphloom: bool = field(default=False)
+    """Controls whether to enable GraphLoom features for theme and theme hierarchy extraction."""
+
     def __post_init__(self):
         os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
         set_logger(self.log_file_path, self.log_level)
@@ -364,6 +369,23 @@ class LightRAG:
             embedding_func=self.embedding_func,
             meta_fields={"src_id", "tgt_id"},
         )
+        
+        if self.graphloom:
+            self.themes_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                    namespace=make_namespace(
+                        self.namespace_prefix, NameSpace.VECTOR_STORE_THEMES
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"theme_name"},
+            )
+            self.theme_hierarchies_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_THEME_HIERARCHIES
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"parent_name", "child_name"},
+            )
+            
         self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
             namespace=make_namespace(
                 self.namespace_prefix, NameSpace.VECTOR_STORE_CHUNKS
@@ -416,7 +438,7 @@ class LightRAG:
         if self._storages_status == StoragesStatus.CREATED:
             tasks = []
 
-            for storage in (
+            storages = [
                 self.full_docs,
                 self.text_chunks,
                 self.entities_vdb,
@@ -425,12 +447,17 @@ class LightRAG:
                 self.chunk_entity_relation_graph,
                 self.llm_response_cache,
                 self.doc_status,
-            ):
+            ]
+            
+            # Add theme storages if graphloom is enabled
+            if self.graphloom:
+                storages.extend([self.themes_vdb, self.theme_hierarchies_vdb])
+
+            for storage in storages:
                 if storage:
                     tasks.append(storage.initialize())
 
             await asyncio.gather(*tasks)
-
             self._storages_status = StoragesStatus.INITIALIZED
             logger.debug("Initialized Storages")
 
@@ -439,7 +466,7 @@ class LightRAG:
         if self._storages_status == StoragesStatus.INITIALIZED:
             tasks = []
 
-            for storage in (
+            storages = [
                 self.full_docs,
                 self.text_chunks,
                 self.entities_vdb,
@@ -448,12 +475,17 @@ class LightRAG:
                 self.chunk_entity_relation_graph,
                 self.llm_response_cache,
                 self.doc_status,
-            ):
+            ]
+            
+            # Add theme storages if graphloom is enabled
+            if self.graphloom:
+                storages.extend([self.themes_vdb, self.theme_hierarchies_vdb])
+
+            for storage in storages:
                 if storage:
                     tasks.append(storage.finalize())
 
             await asyncio.gather(*tasks)
-
             self._storages_status = StoragesStatus.FINALIZED
             logger.debug("Finalized Storages")
 
@@ -767,7 +799,19 @@ class LightRAG:
 
     async def _process_entity_relation_graph(self, chunk: dict[str, Any]) -> None:
         try:
-            await extract_entities(
+            if self.graphloom:
+                await extract_kg(
+                    chunks=chunk,
+                    knowledge_graph_inst=self.chunk_entity_relation_graph,
+                    entity_vdb=self.entities_vdb,
+                    relationships_vdb=self.relationships_vdb,
+                    theme_vdb=self.themes_vdb,
+                    theme_hierarchy_vdb=self.theme_hierarchies_vdb,
+                    llm_response_cache=self.llm_response_cache,
+                    global_config=asdict(self),
+                )
+            else:
+                await extract_entities(
                 chunk,
                 knowledge_graph_inst=self.chunk_entity_relation_graph,
                 entity_vdb=self.entities_vdb,
@@ -793,6 +837,10 @@ class LightRAG:
             ]
             if storage_inst is not None
         ]
+        if self.graphloom:
+            tasks.append(self.themes_vdb.index_done_callback())
+            tasks.append(self.theme_hierarchies_vdb.index_done_callback())
+
         await asyncio.gather(*tasks)
         logger.info("All Insert done")
 

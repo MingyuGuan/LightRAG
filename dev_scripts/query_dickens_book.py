@@ -25,8 +25,11 @@ DEFAULT_RAG_DIR = "index_default"
 # API_KEY = os.environ.get("API_KEY", "xxxxxxxx")
 # print(f"API_KEY: {API_KEY}")
 
-if not os.path.exists("./dickens"):
-    os.mkdir("./dickens")
+model = "llama" # "gpt-4o-mini"
+WORKING_DIR = f"../rags/dickens-{model}-graphloom-llama"
+
+if not os.path.exists(WORKING_DIR):
+    os.mkdir(WORKING_DIR)
 
 
 # LLM model function
@@ -40,6 +43,7 @@ async def llm_model_func(
         history_messages=history_messages,
         base_url="http://0.0.0.0:8000/v1",
         api_key="blahblah",
+        # max_tokens=4096,
         **kwargs,
     )
 
@@ -49,7 +53,7 @@ async def embedding_func(texts: list[str]) -> np.ndarray:
     return await openai_embed(
         texts=texts,
         model="intfloat/e5-mistral-7b-instruct",
-        base_url="http://0.0.0.0:8001/v1",
+        base_url="http://0.0.0.0:8003/v1",
         api_key="blahblah",
     )
 
@@ -63,24 +67,25 @@ async def get_embedding_dim():
 
 
 # Initialize RAG instance
-# rag = LightRAG(
-#     working_dir="./dickens-llama",
-#     llm_model_func=llm_model_func,
-#     embedding_func=EmbeddingFunc(
-#         embedding_dim=asyncio.run(get_embedding_dim()),
-#         max_token_size=8192,
-#         func=embedding_func,
-#     ),
-# )
-
 rag = LightRAG(
-    working_dir="./dickens-gpt-4o-mini",
-    embedding_func=openai_embed,
-    llm_model_func=gpt_4o_mini_complete
+    working_dir=WORKING_DIR,
+    llm_model_func=llm_model_func,
+    embedding_func=EmbeddingFunc(
+        embedding_dim=asyncio.run(get_embedding_dim()),
+        max_token_size=8192,
+        func=embedding_func,
+    ),
+    graphloom=True,
 )
 
-# with open("./book.txt", "r", encoding="utf-8") as f:
-#     rag.insert(f.read())
+# rag = LightRAG(
+#     working_dir=WORKING_DIR,
+#     embedding_func=openai_embed,
+#     llm_model_func=gpt_4o_mini_complete
+# )
+
+with open("../datasets/book.txt", "r", encoding="utf-8") as f:
+    rag.insert(f.read())
 
 breakpoint()
 # Perform naive search

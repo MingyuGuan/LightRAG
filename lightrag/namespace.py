@@ -12,6 +12,10 @@ class NameSpace:
     VECTOR_STORE_RELATIONSHIPS = "relationships"
     VECTOR_STORE_CHUNKS = "chunks"
 
+    # graphloom
+    VECTOR_STORE_THEMES = "themes"
+    VECTOR_STORE_THEME_HIERARCHIES = "theme_hierarchies"
+
     GRAPH_STORE_CHUNK_ENTITY_RELATION = "chunk_entity_relation"
 
     DOC_STATUS = "doc_status"

@@ -1,10 +1,13 @@
 import json
 from openai import OpenAI
 from transformers import GPT2Tokenizer
+import os
 
+# Create the directory structure if it doesn't exist
+os.makedirs('../datasets/questions', exist_ok=True)
 
 def openai_complete_if_cache(
-    model="gpt-4o", prompt=None, system_prompt=None, history_messages=[], **kwargs
+    model="gpt-4o-mini", prompt=None, system_prompt=None, history_messages=[], **kwargs
 ) -> str:
     openai_client = OpenAI()
 
@@ -23,13 +26,46 @@ def openai_complete_if_cache(
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
 
+# Original function with incorrect end token slicing
+# def get_summary(context, tot_tokens=2000):
+#     tokens = tokenizer.tokenize(context)
+#     half_tokens = tot_tokens // 2
+#
+#     start_tokens = tokens[1000 : 1000 + half_tokens]
+#     end_tokens = tokens[-(1000 + half_tokens) : 1000] # wrong implementation
+#
+#     summary_tokens = start_tokens + end_tokens
+#     summary = tokenizer.convert_tokens_to_string(summary_tokens)
+#
+#     return summary
+
+
 def get_summary(context, tot_tokens=2000):
+    """
+    Creates a summary of the input text by taking equal portions from the beginning and end,
+    skipping the middle section.
+
+    Args:
+        context (str): The input text to be summarized
+        tot_tokens (int): The total number of tokens desired in the summary (default: 2000)
+                         Will be split equally between start and end portions
+
+    Returns:
+        str: A summary containing the beginning and end portions of the text
+
+    Note:
+        The function skips the first 1000 tokens before taking the start portion to avoid
+        potential metadata or headers in the beginning of the text.
+    """
     tokens = tokenizer.tokenize(context)
     half_tokens = tot_tokens // 2
 
+    # Take half_tokens starting from position 1000 (skipping potential metadata)
     start_tokens = tokens[1000 : 1000 + half_tokens]
-    end_tokens = tokens[-(1000 + half_tokens) : 1000]
+    # Take the last half_tokens from the text
+    end_tokens = tokens[-half_tokens:]
 
+    # Combine both portions and convert back to text
     summary_tokens = start_tokens + end_tokens
     summary = tokenizer.convert_tokens_to_string(summary_tokens)
 
@@ -69,7 +105,7 @@ for cls in clses:
         ...
     """
 
-    result = openai_complete_if_cache(model="gpt-4o", prompt=prompt)
+    result = openai_complete_if_cache(model="gpt-4o-mini", prompt=prompt)
 
     file_path = f"../datasets/questions/{cls}_questions.txt"
     with open(file_path, "w") as file:
