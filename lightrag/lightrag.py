@@ -29,9 +29,10 @@ from .namespace import NameSpace, make_namespace
 from .operate import (
     chunking_by_token_size,
     extract_entities,
-    extract_kg,
+    extract_gl_kg, # graphloom
     extract_keywords_only,
     kg_query,
+    gl_kg_query, # graphloom
     kg_query_with_keywords,
     mix_kg_vector_query,
     naive_query,
@@ -275,6 +276,13 @@ class LightRAG:
         if not os.path.exists(self.working_dir):
             logger.info(f"Creating working directory {self.working_dir}")
             os.makedirs(self.working_dir)
+
+        # Mingyu: graphloom only support NetworkXHeteroStorage currently
+        if self.graphloom:
+            if self.graph_storage == "NetworkXHeteroStorage":
+                logger.info("GraphLoom is enabled, using NetworkXHeteroStorage")
+            else:
+                raise ValueError("GraphLoom is enabled, but the graph storage is not NetworkXHeteroStorage")
 
         # Verify storage implementation compatibility and environment variables
         storage_configs = [
@@ -800,7 +808,7 @@ class LightRAG:
     async def _process_entity_relation_graph(self, chunk: dict[str, Any]) -> None:
         try:
             if self.graphloom:
-                await extract_kg(
+                await extract_gl_kg(
                     chunks=chunk,
                     knowledge_graph_inst=self.chunk_entity_relation_graph,
                     entity_vdb=self.entities_vdb,
@@ -848,6 +856,7 @@ class LightRAG:
         loop = always_get_an_event_loop()
         loop.run_until_complete(self.ainsert_custom_kg(custom_kg))
 
+    # Mingyu: Not Implemented for GraphLoom
     async def ainsert_custom_kg(self, custom_kg: dict[str, Any]) -> None:
         update_storage = False
         try:
@@ -1035,26 +1044,50 @@ class LightRAG:
             str: The result of the query execution.
         """
         if param.mode in ["local", "global", "hybrid"]:
-            response = await kg_query(
-                query,
-                self.chunk_entity_relation_graph,
-                self.entities_vdb,
-                self.relationships_vdb,
-                self.text_chunks,
-                param,
-                asdict(self),
-                hashing_kv=self.llm_response_cache
-                if self.llm_response_cache
-                and hasattr(self.llm_response_cache, "global_config")
-                else self.key_string_value_json_storage_cls(
-                    namespace=make_namespace(
-                        self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
+            if self.graphloom:
+                response = await gl_kg_query(
+                    query,
+                    self.chunk_entity_relation_graph,
+                    self.entities_vdb,
+                    self.relationships_vdb,
+                    self.themes_vdb,
+                    self.theme_hierarchies_vdb,
+                    self.text_chunks,
+                    param,
+                    asdict(self),
+                    hashing_kv=self.llm_response_cache
+                    if self.llm_response_cache
+                    and hasattr(self.llm_response_cache, "global_config")
+                    else self.key_string_value_json_storage_cls(
+                        namespace=make_namespace(
+                            self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
+                        ),
+                        global_config=asdict(self),
+                        embedding_func=self.embedding_func,
                     ),
-                    global_config=asdict(self),
-                    embedding_func=self.embedding_func,
-                ),
-                system_prompt=system_prompt,
-            )
+                    system_prompt=system_prompt,
+                )
+            else:
+                response = await kg_query(
+                    query,
+                    self.chunk_entity_relation_graph,
+                    self.entities_vdb,
+                    self.relationships_vdb,
+                    self.text_chunks,
+                    param,
+                    asdict(self),
+                    hashing_kv=self.llm_response_cache
+                    if self.llm_response_cache
+                    and hasattr(self.llm_response_cache, "global_config")
+                    else self.key_string_value_json_storage_cls(
+                        namespace=make_namespace(
+                            self.namespace_prefix, NameSpace.KV_STORE_LLM_RESPONSE_CACHE
+                        ),
+                        global_config=asdict(self),
+                        embedding_func=self.embedding_func,
+                    ),
+                    system_prompt=system_prompt,
+                )
         elif param.mode == "naive":
             response = await naive_query(
                 query,
@@ -1217,6 +1250,7 @@ class LightRAG:
     async def _query_done(self):
         await self.llm_response_cache.index_done_callback()
 
+    # Mingyu: Not Implemented for GraphLoom
     def delete_by_entity(self, entity_name: str) -> None:
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.adelete_by_entity(entity_name))
@@ -1281,6 +1315,7 @@ class LightRAG:
         """
         return await self.doc_status.get_docs_by_status(status)
 
+    # Mingyu: Not Implemented for GraphLoom
     async def adelete_by_doc_id(self, doc_id: str) -> None:
         """Delete a document and all its related data
 
@@ -1471,6 +1506,7 @@ class LightRAG:
         except Exception as e:
             logger.error(f"Error while deleting document {doc_id}: {e}")
 
+
     async def get_entity_info(
         self, entity_name: str, include_vector_data: bool = False
     ) -> dict[str, str | None | dict[str, str]]:
@@ -1490,7 +1526,10 @@ class LightRAG:
         entity_name = f'"{entity_name.upper()}"'
 
         # Get information from the graph
-        node_data = await self.chunk_entity_relation_graph.get_node(entity_name)
+        if self.graphloom:
+            node_data = await self.chunk_entity_relation_graph.get_entity(entity_name)
+        else:
+            node_data = await self.chunk_entity_relation_graph.get_node(entity_name)
         source_id = node_data.get("source_id") if node_data else None
 
         result: dict[str, str | None | dict[str, str]] = {
@@ -1529,9 +1568,14 @@ class LightRAG:
         tgt_entity = f'"{tgt_entity.upper()}"'
 
         # Get information from the graph
-        edge_data = await self.chunk_entity_relation_graph.get_edge(
-            src_entity, tgt_entity
-        )
+        if self.graphloom:
+            edge_data = await self.chunk_entity_relation_graph.get_entity(
+                src_entity, tgt_entity
+            )
+        else:
+            edge_data = await self.chunk_entity_relation_graph.get_edge(
+                src_entity, tgt_entity
+            )
         source_id = edge_data.get("source_id") if edge_data else None
 
         result: dict[str, str | None | dict[str, str]] = {

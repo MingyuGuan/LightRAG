@@ -13,6 +13,7 @@ STORAGE_IMPLEMENTATIONS = {
     "GRAPH_STORAGE": {
         "implementations": [
             "NetworkXStorage",
+            "NetworkXHeteroStorage",
             "Neo4JStorage",
             "MongoGraphStorage",
             "TiDBGraphStorage",
@@ -64,6 +65,7 @@ STORAGE_ENV_REQUIREMENTS: dict[str, list[str]] = {
     ],
     # Graph Storage Implementations
     "NetworkXStorage": [],
+    "NetworkXHeteroStorage": [],
     "Neo4JStorage": ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"],
     "MongoGraphStorage": [],
     "TiDBGraphStorage": ["TIDB_USER", "TIDB_PASSWORD", "TIDB_DATABASE"],
@@ -108,6 +110,7 @@ STORAGE_ENV_REQUIREMENTS: dict[str, list[str]] = {
 # Storage implementation module mapping
 STORAGES = {
     "NetworkXStorage": ".kg.networkx_impl",
+    "NetworkXHeteroStorage": ".kg.networkx_gl_impl",
     "JsonKVStorage": ".kg.json_kv_impl",
     "NanoVectorDBStorage": ".kg.nano_vector_db_impl",
     "JsonDocStatusStorage": ".kg.json_doc_status_impl",
