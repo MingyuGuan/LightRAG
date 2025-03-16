@@ -25,9 +25,10 @@ DEFAULT_RAG_DIR = "index_default"
 # API_KEY = os.environ.get("API_KEY", "xxxxxxxx")
 # print(f"API_KEY: {API_KEY}")
 
-model = "llama" # "gpt-4o-mini"
+model = "gpt-4o-mini" # "llama" # "gpt-4o-mini"
 rag_type = "graphloom" # "lightrag"
-WORKING_DIR = f"../rags/dickens-{rag_type}-{model}-dev"
+# WORKING_DIR = f"../rags/dickens-{rag_type}-{model}"
+WORKING_DIR = f"../rags/dickens-{rag_type}-gpt-4o-mini"
 
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
@@ -69,8 +70,7 @@ async def get_embedding_dim():
 # Initialize RAG instance
 rag = LightRAG(
     working_dir=WORKING_DIR,
-    llm_model_func=gpt_4o_mini_complete,
-    # llm_model_func=llm_model_func, # llama
+    llm_model_func=llm_model_func, #gpt_4o_mini_complete, #llm_model_func, # gpt_4o_mini_complete,
     embedding_func=EmbeddingFunc(
         embedding_dim=asyncio.run(get_embedding_dim()),
         max_token_size=8192,
@@ -78,7 +78,8 @@ rag = LightRAG(
     ),
     graphloom=True,
     graph_storage="NetworkXHeteroStorage",
-    log_level = 10 # DEBUG
+    log_level = 10, # DEBUG
+    log_file_path = "/mnt/ssd1/mingyu/LightRAG/dev_scripts/graphloom.log"
 )
 
 # rag = LightRAG(
@@ -87,8 +88,8 @@ rag = LightRAG(
 #     llm_model_func=gpt_4o_mini_complete
 # )
 
-# with open("../datasets/book.txt", "r", encoding="utf-8") as f:
-#     rag.insert(f.read())
+with open("../datasets/book.txt", "r", encoding="utf-8") as f:
+    rag.insert(f.read())
 
 breakpoint()
 # Perform naive search

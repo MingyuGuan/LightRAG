@@ -5,8 +5,6 @@ rag = LightRAG(
     graphloom=True,
     graph_storage="NetworkXHeteroStorage" # currently GraphLoom only supports NetworkX
 )
-
-# Local query implemented, global in progress..
 ```
 
 ### Serve local models using vLLM
