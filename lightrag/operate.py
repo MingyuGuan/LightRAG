@@ -438,7 +438,8 @@ async def _merge_relationships_then_upsert(
     already_description = []
     already_keywords = []
 
-    if await knowledge_graph_inst.has_edge(src_id, tgt_id, "rel"):
+    exists = await knowledge_graph_inst.has_edge(src_id, tgt_id, "rel")
+    if exists:
         already_relationship = await knowledge_graph_inst.get_edge(src_id, tgt_id, "rel")
         # Handle the case where get_edge returns None or missing fields
         if already_relationship:
@@ -580,6 +581,18 @@ async def _merge_themes_then_upsert(
             entity_counts[ent] += 1.0
     
     for ent, count in entity_counts.items():
+        if not (await knowledge_graph_inst.has_node(ent, "ent")):
+            await knowledge_graph_inst.upsert_node(
+                ent,
+                node_data={
+                    "type": "ent",
+                    "source_id": source_id,
+                    "description": description, # use the theme description?
+                    "entity_type": '"UNKNOWN"',
+                },
+                node_type="ent",
+            )
+
         edge_data = {"type": "the-ent"}
         if ent in already_entities:
             # Get existing edge and update weight
@@ -652,7 +665,7 @@ async def _merge_theme_hierarchies_then_upsert(
 
     return theme_hierarchy_data
 
-# graphloom (not implemented yet)
+# graphloom
 async def extract_gl_kg(
     chunks: dict[str, TextChunkSchema],
     knowledge_graph_inst: BaseGraphStorage,
@@ -1773,7 +1786,7 @@ async def _build_gl_query_context(
             text_chunks_db,
             query_param,
         )
-    else:  # hybrid mode (not implemented yet)
+    else: 
         ll_data, hl_data = await asyncio.gather(
             _get_local_data(
                 ll_keywords,
@@ -1799,15 +1812,14 @@ async def _build_gl_query_context(
         ) = ll_data
 
         (
-            hl_themes_context,
+            themes_context,
             hl_entities_context,
             hl_relations_context,
             hl_text_units_context,
         ) = hl_data
 
         
-        themes_context, entities_context, relations_context, text_units_context = combine_contexts(
-            [hl_themes_context],
+        entities_context, relations_context, text_units_context = combine_contexts(
             [hl_entities_context, ll_entities_context],
             [hl_relations_context, ll_relations_context],
             [hl_text_units_context, ll_text_units_context],
@@ -1951,10 +1963,10 @@ async def _get_local_data(
     # get entity information
     entities_data, entity_degrees = await asyncio.gather(
         asyncio.gather(
-            *[knowledge_graph_inst.get_entity(r["entity_name"]) for r in results]
+            *[knowledge_graph_inst.get_node(r["entity_name"], "ent") for r in results]
         ),
         asyncio.gather(
-            *[knowledge_graph_inst.entity_degree(r["entity_name"]) for r in results]
+            *[knowledge_graph_inst.node_degree(r["entity_name"], "ent") for r in results]
         ),
     )
 
@@ -2040,6 +2052,7 @@ async def _get_local_data(
     for i, t in enumerate(use_text_units):
         text_units_section_list.append([i, t["content"]])
     text_units_context = list_of_list_to_csv(text_units_section_list)
+    logger.debug(f"Local Search: Gathered {len(entities_context)} entities, {len(relations_context)} relations, and {len(text_units_context)} text units")
     return entities_context, relations_context, text_units_context
 
 async def _get_node_data(
@@ -2311,7 +2324,7 @@ async def _gl_find_most_related_relations_from_entities(
 
     return all_edges_data
 
-# graphloom (global, TODO)
+# graphloom (global)
 async def _gl_find_most_related_text_units_from_themes(
     themes_data: list[dict],
     query_param: QueryParam,
@@ -2337,18 +2350,15 @@ async def _gl_find_most_related_text_units_from_themes(
     ]
 
     # Get entities associated with themes
-    entities = [
-        split_string_by_multi_markers(t["entities"], [GRAPH_FIELD_SEP])
-        for t in themes_data
-    ]
+    theme_entities = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(t["theme_name"], "the", "the-ent") for t in themes_data]
+    )
     # Flatten the list of entities
-    all_entities = list(set([e for sublist in entities for e in sublist]))
-
-    # Get entity data and their text units
+    all_entities = list(set([e[1] for edges in theme_entities for e in edges]))
+    # Get entity data
     entities_data = await asyncio.gather(
         *[knowledge_graph_inst.get_node(e, "ent") for e in all_entities]
     )
-
     # Create lookup for text units from entities
     all_text_units_lookup = {}
     
@@ -2383,7 +2393,6 @@ async def _gl_find_most_related_text_units_from_themes(
     chunks_data = await asyncio.gather(
         *[text_chunks_db.get_by_id(c_id) for c_id in chunk_ids]
     )
-
     # Combine metadata with content
     valid_chunks = []
     for c_id, chunk_data in zip(chunk_ids, chunks_data):
@@ -2409,7 +2418,6 @@ async def _gl_find_most_related_text_units_from_themes(
         valid_chunks,
         key=lambda x: (-x["theme_counts"], -x["entity_counts"], x["order"])
     )
-
     # Truncate to fit token limit
     truncated_chunks = truncate_list_by_token_size(
         sorted_chunks,
@@ -2426,7 +2434,7 @@ async def _gl_find_most_related_text_units_from_themes(
     all_text_units = [t["data"] for t in truncated_chunks]
     return all_text_units
 
-# graphloom (global, TODO)
+# graphloom (global)
 async def _gl_find_most_related_entities_and_relations_from_themes(
     themes_data: list[dict],
     query_param: QueryParam,
@@ -2455,13 +2463,12 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
     9. Return sorted entities and relations with their metadata and descriptions
     """
     
-    # 1. Collect entities from themes
-    entities = [
-        split_string_by_multi_markers(t["entities"], [GRAPH_FIELD_SEP])
-        for t in themes_data
-    ]
-    # Flatten the list of entities and remove duplicates
-    all_entities = list(set([e for sublist in entities for e in sublist]))
+    # Get entities associated with themes
+    theme_entities = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(t["theme_name"], "the", "the-ent") for t in themes_data]
+    )
+    # Flatten the list of entities
+    all_entities = list(set([e[1] for edges in theme_entities for e in edges]))
 
     # Get entity data and degrees
     entities_data, entity_degrees = await asyncio.gather(
@@ -2471,8 +2478,8 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
     
     # Count theme participation for each entity
     entity_counts = defaultdict(int)
-    for theme_entities in entities:
-        for entity in theme_entities:
+    for sublist in theme_entities:
+        for entity in sublist:
             entity_counts[entity] += 1
     
     # 2. Get relationships for all entities
@@ -2517,7 +2524,7 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
         reverse=True
     )
     
-    # Process relationships
+    # Filter out None values and process relationships
     all_relationships_data = [
         {"src_tgt": k, "rank": d, **v}
         for k, v, d in zip(all_relationships, all_relationships_pack, all_relationships_degree)
@@ -2553,7 +2560,6 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
         f"Truncated relationships from {len(sorted_relationships)} to {len(truncated_relationships)} "
         f"(max tokens:{query_param.max_token_for_global_context})"
     )
-    
     return truncated_entities, truncated_relationships
 
 
@@ -2700,7 +2706,7 @@ async def _get_global_data(
     )
     results = await themes_vdb.query(keywords, top_k=query_param.top_k)
     if not len(results):
-        return "", "", ""
+        return "", "", "", ""
     
     # get entity information
     themes_data, theme_degrees = await asyncio.gather(
@@ -2712,7 +2718,7 @@ async def _get_global_data(
         ),
     )
 
-    if not all([n is not None for n in themes_data]):
+    if not all([n is not None for n in themes_data]): 
         logger.warning("Some themes are missing, maybe the storage is damaged")
 
     themes_data = [
@@ -2730,16 +2736,10 @@ async def _get_global_data(
             themes_data, query_param, knowledge_graph_inst
         )
     )
-
-    len_themes = len(themes_data)
     themes_data = truncate_list_by_token_size(
         themes_data,
         key=lambda x: x["description"],
         max_token_size=query_param.max_token_for_local_context,
-    )
-
-    logger.debug(
-        f"Truncate themes from {len_themes} to {len(themes_data)} (max tokens:{query_param.max_token_for_local_context})"
     )
 
     logger.info(
@@ -2808,6 +2808,7 @@ async def _get_global_data(
     for i, t in enumerate(use_text_units):
         text_units_section_list.append([i, t["content"]])
     text_units_context = list_of_list_to_csv(text_units_section_list)
+
     return themes_context, entities_context, relations_context, text_units_context
 
 

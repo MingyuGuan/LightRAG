@@ -34,9 +34,6 @@ from graspologic import embed
 # - the-hrc: theme-theme edge
 # Assumptions:
 # - Node id is unique. Entities and themes cannot have the same id. (can be removed by adding prefix to node id to avoid collision, but it's not implemented for simplicity)
-# TODO:
-# - Instead of storing entities related to themes as attributes,
-#   we should store them as edges from themes to entities.
 ########################################################
 
 @final
@@ -113,9 +110,9 @@ class NetworkXHeteroStorage(BaseGraphStorage):
         return self._graph.has_edge(source_node_id, target_node_id) and self._graph.edges[source_node_id, target_node_id]["type"] == edge_type
     
     async def get_node(self, node_id: str, node_type: str) -> dict[str, str] | None:
-        n = self._graph.nodes.get(node_id)
-        if n is not None:
-            return n if n["type"] == node_type else None
+        exists = await self.has_node(node_id, node_type)
+        if exists:
+            return self._graph.nodes[node_id]
         return None
 
     async def node_degree(self, node_id: str, edge_type: str) -> int:
@@ -130,13 +127,16 @@ class NetworkXHeteroStorage(BaseGraphStorage):
     async def get_edge(
         self, source_node_id: str, target_node_id: str, edge_type: str
     ) -> dict[str, str] | None:
-        e = self._graph.edges.get((source_node_id, target_node_id))
-        if e is not None:
-            return e if e["type"] == edge_type else None
+        exists = await self.has_edge(source_node_id, target_node_id, edge_type)
+        if exists:
+            return self._graph.edges[(source_node_id, target_node_id)]
         return None
 
     async def get_node_edges(self, source_node_id: str, node_type: str, edge_type: str) -> list[tuple[str, str]] | None:
-        return [(u, v) for u, v, t in self._graph.edges(source_node_id, data="type") if t == edge_type] if await self.has_node(source_node_id, node_type) else None
+        exists = await self.has_node(source_node_id, node_type)
+        if exists:
+            return [(u, v) for u, v, t in self._graph.edges(source_node_id, data="type") if t == edge_type]
+        return None
     
     async def upsert_node(self, node_id: str, node_data: dict[str, str], node_type: str) -> None:
         assert node_data["type"] in {"ent", "the"} and node_data["type"] == node_type
