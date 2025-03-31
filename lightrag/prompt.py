@@ -48,9 +48,12 @@ Format each theme as ("theme"{tuple_delimiter}<theme_name>{tuple_delimiter}<them
 - hierarchy_strength: a numeric score from 1-10 indicating strength of the relationship between the parent theme and child theme
 Format each theme hierarchy as ("theme_hierarchy"{tuple_delimiter}<parent_theme>{tuple_delimiter}<child_theme>{tuple_delimiter}<hierarchy_description>{tuple_delimiter}<hierarchy_strength>)
 
-5. Return output in {language} as a single list of all the entities, relationships, themes, and theme hierarchies identified in steps 1-4. Use **{record_delimiter}** as the list delimiter.
+5. Finally, summarize the text document in not more than a few sentences, focusing on the main themes and entities identified. This summary should be concise and capture the essence of the document.
+Format the summary as ("summary"{tuple_delimiter}<summary_text>)
 
-6. When finished, output {completion_delimiter}
+6. Return output in {language} as a single list of all the entities, relationships, themes, and theme hierarchies identified in steps 1-5. Use **{record_delimiter}** as the list delimiter.
+
+7. When finished, output {completion_delimiter}
 
 ######################
 ---Examples---

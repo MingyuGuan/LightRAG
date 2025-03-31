@@ -224,6 +224,18 @@ async def _handle_single_theme_hierarchy_extraction(
         weight=weight,
     )
 
+# graphloom
+async def _handle_summary_extraction(
+    record_attributes: list[str],
+    chunk_key: str,
+):
+    if len(record_attributes) < 2 or record_attributes[0] != '"summary"':
+        return None
+    return dict(
+        summary=clean_str(record_attributes[1]),
+        source_id=chunk_key,
+    )
+
 async def _merge_nodes_then_upsert(
     entity_name: str,
     nodes_data: list[dict],
@@ -787,8 +799,8 @@ async def extract_gl_kg(
         hint_prompt = kg_extract_prompt.format(
             **context_base, input_text="{input_text}"
         ).format(**context_base, input_text=content)
-
-        final_result = await _user_llm_func_with_cache(hint_prompt)
+        
+        final_result = await _user_llm_func_with_cache(hint_prompt)       
         history = pack_user_ass_to_openai_messages(hint_prompt, final_result)
         for now_glean_index in range(entity_extract_max_gleaning):
             glean_result = await _user_llm_func_with_cache(
@@ -811,11 +823,12 @@ async def extract_gl_kg(
             final_result,
             [context_base["record_delimiter"], context_base["completion_delimiter"]],
         )
-
+        
         maybe_nodes = defaultdict(list)
         maybe_edges = defaultdict(list)
         maybe_themes = defaultdict(list)
         maybe_theme_hierarchies = defaultdict(list)
+        maybe_summaries = dict()
         for record in records:
             record = re.search(r"\((.*)\)", record)
             if record is None:
@@ -853,6 +866,13 @@ async def extract_gl_kg(
                 maybe_theme_hierarchies[(if_theme_hierarchy["parent_name"], if_theme_hierarchy["child_name"])].append(if_theme_hierarchy)
                 continue
             
+            if_summary = await _handle_summary_extraction(
+                record_attributes, chunk_key
+            )
+            if if_summary is not None:
+                maybe_summaries = if_summary
+                continue
+            
         already_processed += 1
         already_entities += len(maybe_nodes)
         already_relations += len(maybe_edges)
@@ -862,7 +882,7 @@ async def extract_gl_kg(
         logger.debug(
             f"Processed {already_processed} chunks, {already_entities} entities(duplicated), {already_relations} relations(duplicated), {already_themes} themes(duplicated), {already_theme_hierarchies} theme_hierarchies(duplicated)\r",
         )
-        return dict(maybe_nodes), dict(maybe_edges), dict(maybe_themes), dict(maybe_theme_hierarchies)
+        return dict(maybe_nodes), dict(maybe_edges), dict(maybe_themes), dict(maybe_theme_hierarchies), maybe_summaries
 
     tasks = [_process_single_content(c) for c in ordered_chunks]
     results = await asyncio.gather(*tasks)
@@ -871,7 +891,7 @@ async def extract_gl_kg(
     maybe_edges = defaultdict(list)
     maybe_themes = defaultdict(list)
     maybe_theme_hierarchies = defaultdict(list)
-    for m_nodes, m_edges, m_themes, m_theme_hierarchies in results:
+    for m_nodes, m_edges, m_themes, m_theme_hierarchies, summary in results:
         for k, v in m_nodes.items():
             maybe_nodes[k].extend(v)
         for k, v in m_edges.items():
