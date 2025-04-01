@@ -38,6 +38,9 @@ class JsonKVStorage(BaseKVStorage):
             )
             for id in ids
         ]
+        
+    async def get_all(self) -> dict[str, Any]:
+        return self._data
 
     async def filter_keys(self, keys: set[str]) -> set[str]:
         return set(keys) - set(self._data.keys())

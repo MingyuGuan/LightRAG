@@ -142,6 +142,10 @@ class BaseKVStorage(StorageNameSpace, ABC):
     @abstractmethod
     async def upsert(self, data: dict[str, dict[str, Any]]) -> None:
         """Upsert data"""
+        
+    async def get_all(self) -> dict[str, Any]:
+        """Get all data"""
+        pass    # optional to implement
 
 
 @dataclass

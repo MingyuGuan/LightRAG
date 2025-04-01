@@ -393,6 +393,12 @@ class LightRAG:
                 embedding_func=self.embedding_func,
                 meta_fields={"parent_name", "child_name"},
             )
+            self.summaries_kvs: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.KV_STORE_SUMMARIES
+                ),
+                embedding_func=self.embedding_func,
+            )
             
         self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
             namespace=make_namespace(
@@ -815,6 +821,7 @@ class LightRAG:
                     relationships_vdb=self.relationships_vdb,
                     theme_vdb=self.themes_vdb,
                     theme_hierarchy_vdb=self.theme_hierarchies_vdb,
+                    summaries_kvs=self.summaries_kvs,
                     llm_response_cache=self.llm_response_cache,
                     global_config=asdict(self),
                 )

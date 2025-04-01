@@ -15,6 +15,7 @@ class NameSpace:
     # graphloom
     VECTOR_STORE_THEMES = "themes"
     VECTOR_STORE_THEME_HIERARCHIES = "theme_hierarchies"
+    KV_STORE_SUMMARIES = "summaries"
 
     GRAPH_STORE_CHUNK_ENTITY_RELATION = "chunk_entity_relation"
 

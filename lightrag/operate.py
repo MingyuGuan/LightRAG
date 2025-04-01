@@ -685,9 +685,10 @@ async def extract_gl_kg(
     relationships_vdb: BaseVectorStorage,
     theme_vdb: BaseVectorStorage,
     theme_hierarchy_vdb: BaseVectorStorage,
+    summaries_kvs: BaseKVStorage,
     global_config: dict[str, str],
     llm_response_cache: BaseKVStorage | None = None,
-) -> None:
+) -> None:   
     use_llm_func: callable = global_config["llm_model_func"]
     entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
     enable_llm_cache_for_entity_extract: bool = global_config[
@@ -890,7 +891,8 @@ async def extract_gl_kg(
     maybe_nodes = defaultdict(list)
     maybe_edges = defaultdict(list)
     maybe_themes = defaultdict(list)
-    maybe_theme_hierarchies = defaultdict(list)
+    maybe_theme_hierarchies = defaultdict(str)
+    maybe_summaries = dict(str)
     for m_nodes, m_edges, m_themes, m_theme_hierarchies, summary in results:
         for k, v in m_nodes.items():
             maybe_nodes[k].extend(v)
@@ -900,6 +902,8 @@ async def extract_gl_kg(
             maybe_themes[k].extend(v)
         for k, v in m_theme_hierarchies.items():
             maybe_theme_hierarchies[tuple(sorted(k))].extend(v)
+        if "summary" in summary and "source_id" in summary:
+            maybe_summaries[summary["source_id"]] = summary["summary"]
 
     all_entities_data = await asyncio.gather(
         *[
@@ -928,7 +932,7 @@ async def extract_gl_kg(
             for k, v in maybe_theme_hierarchies.items()
         ]
     )
-    
+        
     if not (all_entities_data or all_relationships_data or all_themes_data or all_theme_hierarchies_data):
         logger.info("Didn't extract any data (entities, relationships, themes, or theme hierarchies).")
         return
@@ -999,6 +1003,16 @@ async def extract_gl_kg(
             for dp in all_theme_hierarchies_data
         }
         await theme_hierarchy_vdb.upsert(data_for_vdb)
+        
+    if summaries_kvs is not None:
+        data_for_vdb = {
+            compute_mdhash_id(source_id, prefix="sum-"): {
+                "source_id": source_id,
+                "summary": summary,
+            }
+            for source_id, summary in maybe_summaries.items()
+        }
+        await summaries_kvs.upsert(data_for_vdb)
 
 async def extract_entities(
     chunks: dict[str, TextChunkSchema],
