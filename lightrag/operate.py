@@ -891,8 +891,8 @@ async def extract_gl_kg(
     maybe_nodes = defaultdict(list)
     maybe_edges = defaultdict(list)
     maybe_themes = defaultdict(list)
-    maybe_theme_hierarchies = defaultdict(str)
-    maybe_summaries = dict(str)
+    maybe_theme_hierarchies = defaultdict(list)
+    maybe_summaries = defaultdict(str)
     for m_nodes, m_edges, m_themes, m_theme_hierarchies, summary in results:
         for k, v in m_nodes.items():
             maybe_nodes[k].extend(v)
@@ -955,7 +955,7 @@ async def extract_gl_kg(
     #     f"New data extracted: entities:{all_entities_data}, relationships:{all_relationships_data}, "
     #     f"themes:{all_themes_data}, theme_hierarchies:{all_theme_hierarchies_data}"
     # )
-
+    
     if entity_vdb is not None:
         data_for_vdb = {
             compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
@@ -1003,7 +1003,7 @@ async def extract_gl_kg(
             for dp in all_theme_hierarchies_data
         }
         await theme_hierarchy_vdb.upsert(data_for_vdb)
-        
+            
     if summaries_kvs is not None:
         data_for_vdb = {
             compute_mdhash_id(source_id, prefix="sum-"): {
@@ -1013,7 +1013,7 @@ async def extract_gl_kg(
             for source_id, summary in maybe_summaries.items()
         }
         await summaries_kvs.upsert(data_for_vdb)
-
+        
 async def extract_entities(
     chunks: dict[str, TextChunkSchema],
     knowledge_graph_inst: BaseGraphStorage,
