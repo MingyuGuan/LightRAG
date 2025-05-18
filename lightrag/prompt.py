@@ -12,6 +12,12 @@ PROMPTS["DEFAULT_COMPLETION_DELIMITER"] = "<|COMPLETE|>"
 
 PROMPTS["DEFAULT_ENTITY_TYPES"] = ["organization", "person", "geo", "event", "category"]
 
+PROMPTS["COMBINED_SUMMARY_GENERATION"] = """---Goal---
+Given a list of summaries, one for each chunk of the original input text, generate a comprehensive summary 
+of the data provided below:
+{data}
+"""
+
 ### Prompts for GraphLoom
 PROMPTS["kg_extraction"] = """---Goal---
 Given a text document, extract entities, relationships, and themes to build a two-view knowledge graph. The two-view knowledge graph has:

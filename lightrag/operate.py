@@ -1013,6 +1013,24 @@ async def extract_gl_kg(
             for source_id, summary in maybe_summaries.items()
         }
         await summaries_kvs.upsert(data_for_vdb)
+    
+        ### also upsert the combined summary to the kv store. Call LLM to generate a summary for the whole document
+        combined_summary = "\n".join(
+            [summary for summary in maybe_summaries.values()]
+        )
+        combined_summary_prompt = PROMPTS["COMBINED_SUMMARY_GENERATION"].format(
+            data=combined_summary
+        )
+        combined_summary = await use_llm_func(combined_summary_prompt, max_tokens=2000)
+        await summaries_kvs.upsert(
+            {
+                compute_mdhash_id("combined-summary", prefix="sum-"): {
+                    "source_id": "combined-summary",
+                    "summary": combined_summary,
+                }
+            }
+        )
+        breakpoint()
         
 async def extract_entities(
     chunks: dict[str, TextChunkSchema],

@@ -466,6 +466,7 @@ class LightRAG:
             # Add theme storages if graphloom is enabled
             if self.graphloom:
                 storages.extend([self.themes_vdb, self.theme_hierarchies_vdb])
+                storages.extend([self.summaries_kvs])
 
             for storage in storages:
                 if storage:
@@ -494,6 +495,7 @@ class LightRAG:
             # Add theme storages if graphloom is enabled
             if self.graphloom:
                 storages.extend([self.themes_vdb, self.theme_hierarchies_vdb])
+                storages.extend([self.summaries_kvs])
 
             for storage in storages:
                 if storage:
@@ -855,6 +857,7 @@ class LightRAG:
         if self.graphloom:
             tasks.append(self.themes_vdb.index_done_callback())
             tasks.append(self.theme_hierarchies_vdb.index_done_callback())
+            tasks.append(self.summaries_kvs.index_done_callback())
 
         await asyncio.gather(*tasks)
         logger.info("All Insert done")
