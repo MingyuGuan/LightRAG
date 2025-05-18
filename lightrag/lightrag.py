@@ -267,6 +267,9 @@ class LightRAG:
     
     graphloom: bool = field(default=False)
     """Controls whether to enable GraphLoom features for theme and theme hierarchy extraction."""
+    
+    graphloom_summary: bool = field(default=False)
+    """Controls whether to enable GraphLoom summary features for keyword extraction."""
 
     def __post_init__(self):
         os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
@@ -1062,6 +1065,7 @@ class LightRAG:
                     self.relationships_vdb,
                     self.themes_vdb,
                     self.theme_hierarchies_vdb,
+                    self.summaries_kvs,
                     self.text_chunks,
                     param,
                     asdict(self),

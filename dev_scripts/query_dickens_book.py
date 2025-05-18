@@ -58,6 +58,7 @@ rag = LightRAG(
         func=embedding_func,
     ), #openai_embed,
     graphloom=True,
+    graphloom_summary=True,
     graph_storage="NetworkXHeteroStorage",
     log_level = 10, # DEBUG
     log_file_path = "/mnt/ssd1/mingyu/LightRAG/dev_scripts/graphloom.log"

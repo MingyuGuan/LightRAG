@@ -385,6 +385,43 @@ Output:
 
 """
 
+PROMPTS["keywords_extraction_with_summary"] = """---Role---
+
+You are a helpful assistant tasked with identifying both high-level and low-level keywords in the user's query and conversation history.
+
+---Goal---
+
+Given the query and conversation history, list both high-level and low-level keywords. High-level keywords focus on overarching concepts or themes, while low-level keywords focus on specific entities, details, or concrete terms.
+You are additionally given a summary of the knowledge store being queried by the user. Use this summary to help you contextualize and identify the keywords.
+---Instructions---
+
+- Consider both the current query and relevant conversation history when extracting keywords along with the summary of the knowledge store
+- Output the keywords in JSON format
+- The JSON should have two keys:
+  - "high_level_keywords" for overarching concepts or themes
+  - "low_level_keywords" for specific entities or details
+
+######################
+---Examples---
+######################
+{examples}
+
+#############################
+---Real Data---
+######################
+Conversation History:
+{history}
+
+Knowledge Store Summary:
+{summary}
+
+Current Query: {query}
+######################
+The `Output` should be human text, not unicode characters. Keep the same language as `Query`.
+Output:
+
+"""
+
 PROMPTS["keywords_extraction_examples"] = [
     """Example 1:
 

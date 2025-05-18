@@ -1024,13 +1024,9 @@ async def extract_gl_kg(
         combined_summary = await use_llm_func(combined_summary_prompt, max_tokens=2000)
         await summaries_kvs.upsert(
             {
-                compute_mdhash_id("combined-summary", prefix="sum-"): {
-                    "source_id": "combined-summary",
-                    "summary": combined_summary,
-                }
+                "combined-summary": combined_summary
             }
         )
-        breakpoint()
         
 async def extract_entities(
     chunks: dict[str, TextChunkSchema],
@@ -1280,6 +1276,7 @@ async def gl_kg_query(
     relationships_vdb: BaseVectorStorage,
     themes_vdb: BaseVectorStorage,
     theme_hierarchies_vdb: BaseVectorStorage,
+    summaries_kvs: BaseKVStorage,
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
     global_config: dict[str, str],
@@ -1294,10 +1291,12 @@ async def gl_kg_query(
     )
     if cached_response is not None:
         return cached_response
+    
+    combined_summary = await summaries_kvs.get_by_id("combined-summary")
 
     # Extract keywords using extract_keywords_only function which already supports conversation history
     hl_keywords, ll_keywords = await extract_keywords_only(
-        query, query_param, global_config, hashing_kv
+        query, query_param, global_config, hashing_kv, combined_summary
     )
 
     logger.debug(f"High-level keywords: {hl_keywords}")
@@ -1332,6 +1331,7 @@ async def gl_kg_query(
         relationships_vdb,
         themes_vdb,
         theme_hierarchies_vdb,
+        summaries_kvs,
         text_chunks_db,
         query_param,
     )
@@ -1515,6 +1515,7 @@ async def extract_keywords_only(
     param: QueryParam,
     global_config: dict[str, str],
     hashing_kv: BaseKVStorage | None = None,
+    combined_summary: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """
     Extract high-level and low-level keywords from the given 'text' using the LLM.
@@ -1558,10 +1559,20 @@ async def extract_keywords_only(
         )
 
     # 4. Build the keyword-extraction prompt
-    kw_prompt = PROMPTS["keywords_extraction"].format(
-        query=text, examples=examples, language=language, history=history_context
-    )
-
+    kw_prompt = None
+    if global_config["graphloom_summary"] and combined_summary:
+        kw_prompt = PROMPTS["keywords_extraction_with_summary"].format(
+            query=text,
+            examples=examples,
+            language=language,
+            history=history_context,
+            summary=combined_summary    # TODO: can enhance to use the per-chunk summaries
+        )
+    else:
+        kw_prompt = PROMPTS["keywords_extraction"].format(
+            query=text, examples=examples, language=language, history=history_context
+        )
+        
     len_of_prompts = len(encode_string_by_tiktoken(kw_prompt))
     logger.debug(f"[kg_query]Prompt Tokens: {len_of_prompts}")
 
@@ -1582,7 +1593,7 @@ async def extract_keywords_only(
 
     hl_keywords = keywords_data.get("high_level_keywords", [])
     ll_keywords = keywords_data.get("low_level_keywords", [])
-
+    
     # 7. Cache only the processed keywords with cache type
     if hl_keywords or ll_keywords:
         cache_data = {
@@ -1817,6 +1828,7 @@ async def _build_gl_query_context(
     relationships_vdb: BaseVectorStorage,
     themes_vdb: BaseVectorStorage,
     theme_hierarchies_vdb: BaseVectorStorage,
+    summaries_kvs: BaseKVStorage,
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
 ):

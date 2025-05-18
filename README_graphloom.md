@@ -33,9 +33,26 @@ CUDA_VISIBLE_DEVICES=3 vllm serve intfloat/e5-mistral-7b-instruct --port 8003 --
     - Should local search also return themes? i.e., getting themes from entities by the-ent edges.
 - Global Search:
     - Somehow *_get_global_data* always gathers 0 relations, need to debug..
-- In-context Query Keyword Exaction:
+- (Done) In-context Query Keyword Exaction:
     - Instead of extracting keywords solely based on the query, we can also provide a summary of the RAG to the LLM for more accurate extraction.
     - For example, the global keywords extracted from the query "What are the top themes in this story?" are "Themes", "Story analysis", and "Literary elements", which naturally results in a poor match to the actual content/information in the RAG.
     - There are several ways to generate/maintain the summary of RAG. For example, in the kg_extraction prompt, we can also ask llm to briefly summarize the current chunk, and gradually adding the chunk summary to augment the summary of RAG and save it. Then during the query time, we can simply use this summary of RAG for query keyword extraction, and update it whenever the RAG gets new documents inserted.
 - Adaptive RAG:
     - will update..
+
+In-context Query Keyword Extraction:
+Enable with 
+```
+graphloom=True,
+graphloom_summary=True,
+```
+
+Example extraction for A Christmas Carol
+```
+(Pdb) hl_keywords
+['Themes', 'A Christmas Carol', 'Redemption', 'Family', 'Social responsibility', 'Spirit of Christmas']
+(Pdb) ll_keywords
+['Ebenezer Scrooge', 'Fred', 'Bob Cratchit', 'Jacob Marley', 'Christmas Past', 'Christmas Present', 'Christmas Yet to Come', 'Tiny Tim', 'Materialism', 'Empathy', 'Personal change']
+(Pdb) text
+'What are the top themes in this story?'
+```
