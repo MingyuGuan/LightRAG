@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
 from typing import Any, AsyncIterator, Callable, Iterator, cast, final
+import atexit
 
 from lightrag.kg import (
     STORAGE_ENV_REQUIREMENTS,
@@ -271,6 +272,9 @@ class LightRAG:
     graphloom_summary: bool = field(default=False)
     """Controls whether to enable GraphLoom summary features for keyword extraction."""
 
+    reset_retrieval_count: bool = field(default=False)
+    """If True, resets all retrieval counts to 0 during initialization."""
+
     def __post_init__(self):
         os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
         set_logger(self.log_file_path, self.log_level)
@@ -279,6 +283,9 @@ class LightRAG:
         if not os.path.exists(self.working_dir):
             logger.info(f"Creating working directory {self.working_dir}")
             os.makedirs(self.working_dir)
+
+        # Register cleanup function
+        atexit.register(self._cleanup)
 
         # Mingyu: graphloom only support NetworkXHeteroStorage currently
         if self.graphloom:
@@ -443,6 +450,20 @@ class LightRAG:
         if self.auto_manage_storages_states:
             loop = always_get_an_event_loop()
             loop.run_until_complete(self.initialize_storages())
+
+        # Reset retrieval counts
+        if self.reset_retrieval_count:
+            loop = always_get_an_event_loop()
+            loop.run_until_complete(self._reset_retrieval_counts())
+
+    def _cleanup(self):
+        """Cleanup function registered with atexit to ensure storages are finalized."""
+        try:
+            if self.auto_manage_storages_states:
+                loop = always_get_an_event_loop()
+                loop.run_until_complete(self.finalize_storages())
+        except Exception as e:
+            logger.error(f"Error during cleanup: {str(e)}")
 
     def __del__(self):
         # Finalize storages
@@ -1624,3 +1645,28 @@ class LightRAG:
                 f"Storage implementation '{storage_name}' requires the following "
                 f"environment variables: {', '.join(missing_vars)}"
             )
+
+    async def _reset_retrieval_counts(self) -> None:
+        """Reset all retrieval counts to 0 in the graph storage."""
+        if not isinstance(self.chunk_entity_relation_graph, BaseGraphStorage):
+            logger.warning("Graph storage does not support retrieval count reset")
+            return
+
+        try:
+            # Reset node retrieval counts
+            for node in self.chunk_entity_relation_graph._graph.nodes():
+                logger.info(f"Reset retrieval count for node: {node}")
+                if 'retrieval_count' in self.chunk_entity_relation_graph._graph.nodes[node]:
+                    logger.info(f"Retrieval count for node: {node} is {self.chunk_entity_relation_graph._graph.nodes[node]['retrieval_count']}")
+                    self.chunk_entity_relation_graph._graph.nodes[node]['retrieval_count'] = 0
+
+            # Reset edge retrieval counts
+            for edge in self.chunk_entity_relation_graph._graph.edges():
+                logger.info(f"Reset retrieval count for edge: {edge}")
+                if 'retrieval_count' in self.chunk_entity_relation_graph._graph.edges[edge]:
+                    logger.info(f"Retrieval count for edge: {edge} is {self.chunk_entity_relation_graph._graph.edges[edge]['retrieval_count']}")
+                    self.chunk_entity_relation_graph._graph.edges[edge]['retrieval_count'] = 0
+
+            logger.info("Successfully reset all retrieval counts to 0")
+        except Exception as e:
+            logger.error(f"Error resetting retrieval counts: {e}")

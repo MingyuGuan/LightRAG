@@ -391,6 +391,7 @@ async def _merge_entities_then_upsert(
     already_entity_types = []
     already_source_ids = []
     already_description = []
+    already_retrieval_count = 0
 
     already_entity = await knowledge_graph_inst.get_node(entity_name, "ent")
     if already_entity is not None:
@@ -399,6 +400,7 @@ async def _merge_entities_then_upsert(
             split_string_by_multi_markers(already_entity["source_id"], [GRAPH_FIELD_SEP])
         )
         already_description.append(already_entity["description"])
+        already_retrieval_count = already_entity.get("retrieval_count", 0)
     else:
         logger.debug(f"No existing entity found for: {entity_name}")
 
@@ -427,6 +429,7 @@ async def _merge_entities_then_upsert(
         entity_type=entity_type,
         description=description,
         source_id=source_id,
+        retrieval_count=already_retrieval_count,
     )
     await knowledge_graph_inst.upsert_node(
         entity_name,
@@ -449,6 +452,7 @@ async def _merge_relationships_then_upsert(
     already_source_ids = []
     already_description = []
     already_keywords = []
+    already_retrieval_count = 0
 
     exists = await knowledge_graph_inst.has_edge(src_id, tgt_id, "rel")
     if exists:
@@ -477,6 +481,8 @@ async def _merge_relationships_then_upsert(
                         already_relationship["keywords"], [GRAPH_FIELD_SEP]
                     )
                 )
+            
+            already_retrieval_count = already_relationship.get("retrieval_count", 0)
 
     # Process edges_data with None checks
     weight = sum([dp["weight"] for dp in relationships_data] + already_weights)
@@ -527,6 +533,7 @@ async def _merge_relationships_then_upsert(
             description=description,
             keywords=keywords,
             source_id=source_id,
+            retrieval_count=already_retrieval_count,
         ),
         edge_type="rel",
     )
@@ -549,6 +556,7 @@ async def _merge_themes_then_upsert(
 ):
     already_source_ids = []
     already_description = []
+    already_retrieval_count = 0
 
     already_theme = await knowledge_graph_inst.get_node(theme_name, "the")
     if already_theme is not None:
@@ -556,6 +564,7 @@ async def _merge_themes_then_upsert(
             split_string_by_multi_markers(already_theme["source_id"], [GRAPH_FIELD_SEP])
         )
         already_description.append(already_theme["description"])
+        already_retrieval_count = already_theme.get("retrieval_count", 0)
     else:
         logger.debug(f"No existing theme found for: {theme_name}")
     
@@ -575,6 +584,7 @@ async def _merge_themes_then_upsert(
         type="the",
         description=description,
         source_id=source_id,
+        retrieval_count=already_retrieval_count,
     )
     await knowledge_graph_inst.upsert_node(
         theme_name,
@@ -637,6 +647,7 @@ async def _merge_theme_hierarchies_then_upsert(
     already_source_ids = []
     already_description = []
     already_weight = []
+    already_retrieval_count = 0
     already_theme_hierarchy = await knowledge_graph_inst.get_edge(parent_name, child_name, 'the-hrc')
     if already_theme_hierarchy is not None:
         already_source_ids.extend(
@@ -644,6 +655,7 @@ async def _merge_theme_hierarchies_then_upsert(
         )
         already_description.append(already_theme_hierarchy["description"])
         already_weight.append(already_theme_hierarchy["weight"])
+        already_retrieval_count = already_theme_hierarchy.get("retrieval_count", 0)
 
     weight = sum([dp["weight"] for dp in theme_hierarchies_data] + already_weight)
     description = GRAPH_FIELD_SEP.join(
@@ -663,6 +675,7 @@ async def _merge_theme_hierarchies_then_upsert(
             weight=weight,
             description=description,
             source_id=source_id,
+            retrieval_count=already_retrieval_count,
         ),
         edge_type="the-hrc",
     )
@@ -2024,6 +2037,7 @@ async def _get_local_data(
     results = await entities_vdb.query(keywords, top_k=query_param.top_k)
     if not len(results):
         return "", "", ""
+    
     # get entity information
     entities_data, entity_degrees = await asyncio.gather(
         asyncio.gather(
@@ -2041,7 +2055,13 @@ async def _get_local_data(
         {**n, "entity_name": k["entity_name"], "rank": d}
         for k, n, d in zip(results, entities_data, entity_degrees)
         if n is not None
-    ] 
+    ]
+
+    # Increment retrieval counts for entities
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_retrieval_count(e["entity_name"], "ent")
+        for e in entities_data
+    ])
 
     # get text chunks and relationships associated with entities
     use_text_units, use_relations = await asyncio.gather(
@@ -2052,6 +2072,12 @@ async def _get_local_data(
             entities_data, query_param, knowledge_graph_inst
         ),
     )
+
+    # Increment retrieval counts for relationships
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_edge_retrieval_count(r["src_tgt"][0], r["src_tgt"][1], "rel")
+        for r in use_relations
+    ])
 
     len_entities = len(entities_data)
     entities_data = truncate_list_by_token_size(
@@ -2772,7 +2798,7 @@ async def _get_global_data(
     if not len(results):
         return "", "", "", ""
     
-    # get entity information
+    # get theme information
     themes_data, theme_degrees = await asyncio.gather(
         asyncio.gather(
             *[knowledge_graph_inst.get_node(r["theme_name"], "the") for r in results]
@@ -2789,7 +2815,13 @@ async def _get_global_data(
         {**n, "theme_name": k["theme_name"], "rank": d}
         for k, n, d in zip(results, themes_data, theme_degrees)
         if n is not None
-    ] 
+    ]
+
+    # Increment retrieval counts for themes
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_retrieval_count(t["theme_name"], "the")
+        for t in themes_data
+    ])
 
     # get text chunks, entities, and relations associated with themes
     use_text_units, (use_entities, use_relations) = await asyncio.gather(
@@ -2805,6 +2837,16 @@ async def _get_global_data(
         key=lambda x: x["description"],
         max_token_size=query_param.max_token_for_local_context,
     )
+
+     # Increment retrieval counts for entities and relationships 
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_retrieval_count(e["entity_name"], "ent")
+        for e in use_entities
+    ])
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_edge_retrieval_count(r["src_tgt"][0], r["src_tgt"][1], "rel")
+        for r in use_relations
+    ])
 
     logger.info(
         f"Global query uses {len(themes_data)} themes, {len(use_entities)} entities, {len(use_relations)} relations, {len(use_text_units)} chunks"
