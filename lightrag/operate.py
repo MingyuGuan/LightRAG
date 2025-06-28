@@ -2268,8 +2268,8 @@ async def _gl_find_most_related_text_units_from_entities(
     4. Rank text units based on:
        - Their original order in the input entities list (preserving document context)
        - The number of relationships they participate in (more relationships = higher relevance)
+       - The retrieval_count sum of relationships they participate in (more frequently retrieved = higher relevance)
     5. Truncate the results to fit within token limits
-
     """
 
     text_units = [
@@ -2300,6 +2300,18 @@ async def _gl_find_most_related_text_units_from_entities(
         if v is not None and "source_id" in v  # Add source_id check
     }
 
+    # Get relationship data to access retrieval counts
+    all_relationships_data = []
+    for entity_name, entity_rels in zip([e["entity_name"] for e in entities_data], relationships):
+        for rel in entity_rels:
+            rel_data = await knowledge_graph_inst.get_edge(entity_name, rel[1], "rel")
+            if rel_data:
+                all_relationships_data.append({
+                    "src": entity_name,
+                    "tgt": rel[1],
+                    "retrieval_count": rel_data.get("retrieval_count", 0)
+                })
+
     all_text_units_lookup = {}
     tasks = []
     for index, (this_text_units, this_relationships) in enumerate(zip(text_units, relationships)):
@@ -2316,8 +2328,10 @@ async def _gl_find_most_related_text_units_from_entities(
             "data": data,
             "order": index,
             "relation_counts": 0,
+            "relation_retrieval_sum": 0,
         }
 
+        # Count relationships this text unit participates in and sum their retrieval counts
         if this_relationships:
             for r in this_relationships:
                 # Check if the target entity exists in one-hop lookup
@@ -2327,6 +2341,11 @@ async def _gl_find_most_related_text_units_from_entities(
                     and c_id in all_one_hop_text_units_lookup[r[1]]
                 ):
                     all_text_units_lookup[c_id]["relation_counts"] += 1
+                    # Find the retrieval count for this relationship
+                    for rel_data in all_relationships_data:
+                        if (rel_data["src"] == r[0] and rel_data["tgt"] == r[1]) or (rel_data["src"] == r[1] and rel_data["tgt"] == r[0]):
+                            all_text_units_lookup[c_id]["relation_retrieval_sum"] += rel_data["retrieval_count"]
+                            break
 
     # Filter out None values and ensure data has content
     all_text_units = [
@@ -2340,7 +2359,8 @@ async def _gl_find_most_related_text_units_from_entities(
         return []
 
     all_text_units = sorted(
-        all_text_units, key=lambda x: (x["order"], -x["relation_counts"])
+        all_text_units, 
+        key=lambda x: (x["order"], -x["relation_counts"], -x["relation_retrieval_sum"])
     )
 
     all_text_units = truncate_list_by_token_size(
