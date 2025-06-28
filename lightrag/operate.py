@@ -2369,10 +2369,12 @@ async def _gl_find_most_related_relations_from_entities(
     2. Rank relations based on:
        - Their degree (rank - number of connections in the graph)
        - Their weight (strength of the relationship)
+       - Their retrieval_count (how often they've been retrieved)
     3. Remove duplicate relations by keeping the highest ranked version
     4. Truncate results to fit within token limits while preserving:
        - Most connected relations
        - Strongest relationships
+       - Most frequently retrieved relationships
     5. Return sorted relations with their metadata and descriptions
     """
     all_related_edges = await asyncio.gather(
@@ -2400,7 +2402,9 @@ async def _gl_find_most_related_relations_from_entities(
         if v is not None
     ]
     all_edges_data = sorted(
-        all_edges_data, key=lambda x: (x["rank"], x["weight"]), reverse=True
+        all_edges_data, 
+        key=lambda x: (x["rank"], x["weight"], x.get("retrieval_count", 0)), 
+        reverse=True
     )
     all_edges_data = truncate_list_by_token_size(
         all_edges_data,
@@ -2431,6 +2435,7 @@ async def _gl_find_most_related_text_units_from_themes(
        - Their original order in the input themes list (preserving document context)
        - The number of themes they participate in (more themes = higher relevance)
        - The number of entities they participate in (more entities = higher relevance)
+       - The retrieval_count of associated themes and entities (more frequently retrieved = higher relevance)
     5. Truncate the results to fit within token limits
     """
     # Get text units from themes
@@ -2454,28 +2459,35 @@ async def _gl_find_most_related_text_units_from_themes(
     
     # Process theme text units
     for theme_idx, theme_units in enumerate(themes_text_units):
+        theme_retrieval_count = themes_data[theme_idx].get("retrieval_count", 0)
         for c_id in theme_units:
             if c_id not in all_text_units_lookup:
                 all_text_units_lookup[c_id] = {
                     "order": theme_idx,
                     "theme_counts": 1,
-                    "entity_counts": 0
+                    "entity_counts": 0,
+                    "theme_retrieval_sum": theme_retrieval_count
                 }
             else:
                 all_text_units_lookup[c_id]["theme_counts"] += 1
+                all_text_units_lookup[c_id]["theme_retrieval_sum"] += theme_retrieval_count
 
     # Process entity text units
     for entity_data in entities_data:
         if entity_data and "source_id" in entity_data:
+            entity_retrieval_count = entity_data.get("retrieval_count", 0)
             entity_units = split_string_by_multi_markers(entity_data["source_id"], [GRAPH_FIELD_SEP])
             for c_id in entity_units:
                 if c_id in all_text_units_lookup:
                     all_text_units_lookup[c_id]["entity_counts"] += 1
+                    all_text_units_lookup[c_id]["entity_retrieval_sum"] = all_text_units_lookup[c_id].get("entity_retrieval_sum", 0) + entity_retrieval_count
                 else:
                     all_text_units_lookup[c_id] = {
                         "order": len(themes_text_units),  # Lower priority for entity-only units
                         "theme_counts": 0,
-                        "entity_counts": 1
+                        "entity_counts": 1,
+                        "theme_retrieval_sum": 0,
+                        "entity_retrieval_sum": entity_retrieval_count
                     }
 
     # Fetch actual text content
@@ -2493,7 +2505,9 @@ async def _gl_find_most_related_text_units_from_themes(
                 "data": chunk_data,
                 "order": metadata["order"],
                 "theme_counts": metadata["theme_counts"],
-                "entity_counts": metadata["entity_counts"]
+                "entity_counts": metadata["entity_counts"],
+                "theme_retrieval_sum": metadata.get("theme_retrieval_sum", 0),
+                "entity_retrieval_sum": metadata.get("entity_retrieval_sum", 0)
             })
 
     if not valid_chunks:
@@ -2503,10 +2517,12 @@ async def _gl_find_most_related_text_units_from_themes(
     # Sort by:
     # 1. Theme participation (more themes first)
     # 2. Entity connections (more connections first)
-    # 3. Original order (earlier in document first)
+    # 3. Theme retrieval count (more frequently retrieved themes first)
+    # 4. Entity retrieval count (more frequently retrieved entities first)
+    # 5. Original order (earlier in document first)
     sorted_chunks = sorted(
         valid_chunks,
-        key=lambda x: (-x["theme_counts"], -x["entity_counts"], x["order"])
+        key=lambda x: (-x["theme_counts"], -x["entity_counts"], -x["theme_retrieval_sum"], -x["entity_retrieval_sum"], x["order"])
     )
     # Truncate to fit token limit
     truncated_chunks = truncate_list_by_token_size(
@@ -2539,17 +2555,21 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
     3. Score entities based on:
        - Theme participation count
        - Entity degree (connectivity)
+       - Entity retrieval_count (how often they've been retrieved)
     4. Score relationships based on:
        - Strength
        - Entity scores of source and target
+       - Relationship retrieval_count (how often they've been retrieved)
     5. Sort entities and relationships by score
     6. Apply token budget constraints
     7. Truncate entity results to fit within token limits while preserving:
        - Most connected entities
        - Most relevant entities
+       - Most frequently retrieved entities
     8. Truncate relation results to fit within token limits while preserving:
        - Most connected relations
        - Strongest relationships
+       - Most frequently retrieved relationships
     9. Return sorted entities and relations with their metadata and descriptions
     """
     
@@ -2594,7 +2614,7 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
         asyncio.gather(*[knowledge_graph_inst.edge_degree(e[0], e[1], "rel") for e in all_relationships])
     )
     
-    # Combine entity data with their degrees and theme counts
+    # Combine entity data with their degrees, theme counts, and retrieval counts
     entity_data = []
     for entity_name, entity_info, degree in zip(all_entities, entities_data, entity_degrees):
         if entity_info is not None:  # Check for valid entity data
@@ -2602,15 +2622,16 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
                 "entity_name": entity_name,
                 "rank": degree,
                 "theme_count": entity_counts[entity_name],
+                "retrieval_count": entity_info.get("retrieval_count", 0),
                 "description": entity_info.get("description", ""),
                 "entity_type": entity_info.get("entity_type", "UNKNOWN"),
                 "source_id": entity_info.get("source_id", "")
             })
     
-    # Sort entities by rank and theme participation
+    # Sort entities by rank, theme participation, and retrieval count
     sorted_entities = sorted(
         entity_data,
-        key=lambda x: (x["rank"], x["theme_count"]),
+        key=lambda x: (x["rank"], x["theme_count"], x["retrieval_count"]),
         reverse=True
     )
     
@@ -2621,10 +2642,10 @@ async def _gl_find_most_related_entities_and_relations_from_themes(
         if v is not None
     ]
     
-    # Sort relationships by rank and weight
+    # Sort relationships by rank, weight, and retrieval count
     sorted_relationships = sorted(
         all_relationships_data,
-        key=lambda x: (x["rank"], x.get("weight", 0)),
+        key=lambda x: (x["rank"], x.get("weight", 0), x.get("retrieval_count", 0)),
         reverse=True
     )
     
