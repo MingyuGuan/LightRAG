@@ -40,9 +40,8 @@ async def llm_model_func(
 async def embedding_func(texts: list[str]) -> np.ndarray:
     return await openai_embed(
         texts=texts,
-        model="intfloat/e5-mistral-7b-instruct",
-        base_url="http://0.0.0.0:8003/v1",
-        api_key="blahblah",
+        model="text-embedding-ada-002",
+        api_key=os.environ.get("OPENAI_API_KEY"),
     )
 
 async def get_embedding_dim():
@@ -63,6 +62,7 @@ rag = LightRAG(
     ), #openai_embed,
     graphloom=True,
     graphloom_summary=True,
+    reset_retrieval_count=False,
     graph_storage="NetworkXHeteroStorage",
     log_level = 10, # DEBUG
     log_file_path = str(WORKING_DIR / "graphloom.log")

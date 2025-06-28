@@ -195,6 +195,18 @@ class NetworkXHeteroStorage(BaseGraphStorage):
             if self._graph.has_edge(source, target):
                 self._graph.remove_edge(source, target)
 
+    async def increment_retrieval_count(self, node_id: str, node_type: str) -> None:
+        if await self.has_node(node_id, node_type):
+            current_data = self._graph.nodes[node_id]
+            current_count = current_data.get('retrieval_count', 0)
+            self._graph.nodes[node_id]['retrieval_count'] = current_count + 1
+
+    async def increment_edge_retrieval_count(self, src_id: str, tgt_id: str, edge_type: str) -> None:
+        if await self.has_edge(src_id, tgt_id, edge_type):
+            current_data = self._graph.edges[src_id, tgt_id]
+            current_count = current_data.get('retrieval_count', 0)
+            self._graph.edges[src_id, tgt_id]['retrieval_count'] = current_count + 1
+
     async def get_all_labels(self) -> list[str]:
         raise NotImplementedError
 
@@ -202,5 +214,14 @@ class NetworkXHeteroStorage(BaseGraphStorage):
         self, node_label: str, max_depth: int = 5
     ) -> KnowledgeGraph:
         raise NotImplementedError
+    
+    async def finalize(self) -> None:
+        """Finalize the storage by saving the graph to disk."""
+        try:
+            if self._graph is not None and self._graphml_xml_file is not None:
+                # Use the class method directly from the class object
+                NetworkXHeteroStorage.write_nx_graph(self._graph, self._graphml_xml_file)
+        except Exception as e:
+            logger.error(f"Error during finalization: {str(e)}")
     
 
