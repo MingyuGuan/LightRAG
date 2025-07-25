@@ -1,0 +1,3 @@
+[submodule "evaluation/squality"]
+	path = evaluation/squality
+	url = https://github.com/nyu-mll/SQuALITY.git
