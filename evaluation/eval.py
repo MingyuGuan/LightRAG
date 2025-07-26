@@ -2,6 +2,8 @@ import sys
 import argparse
 import os
 from evaluation.config import GraphLoomConfig
+from evaluation.engine import RAGEngine
+from evaluation.test import Test
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Evaluation script for LightRAG')
@@ -25,7 +27,11 @@ def main():
     configs = GraphLoomConfig.parse_config_from_file(args.config)
     
     print(configs)
-    # TODO: invoke graphloom
+    
+    tests = [Test(config, documents=[], queries=[]) for config in configs]
+    
+    [print(test.engine) for test in tests]
+    ### TODO: invoke tests
     
 
 if __name__ == "__main__":
