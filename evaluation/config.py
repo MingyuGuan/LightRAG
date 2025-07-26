@@ -5,8 +5,7 @@ import json
 
 @dataclass
 class EvaluationConfig:
-    pass
-
+    input_file_path: str
 
 @dataclass
 class GraphLoomConfig(EvaluationConfig):
@@ -17,9 +16,11 @@ class GraphLoomConfig(EvaluationConfig):
     def parse_config(config: Dict[str, Any]) -> 'GraphLoomConfig':
         try:
             gl_config = config["graphloom_config"]
+            test_config = config["test_config"]
             return GraphLoomConfig(
                 gl_enabled=gl_config.get("gl_enabled", False),
-                gl_summ_enabled=gl_config.get("gl_summ_enabled", False)
+                gl_summ_enabled=gl_config.get("gl_summ_enabled", False),
+                input_file_path=test_config.get("input_file_path", None)
             )
         except Exception as e:
             raise ValueError(f"Error parsing GraphLoomConfig: {e}")
