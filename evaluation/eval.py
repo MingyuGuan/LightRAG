@@ -2,8 +2,7 @@ import sys
 import argparse
 import os
 from evaluation.config import GraphLoomConfig
-from evaluation.engine import RAGEngine
-from evaluation.test import Test
+from evaluation.test import Test, SQualityTest
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Evaluation script for LightRAG')
@@ -28,11 +27,12 @@ def main():
     
     print(configs)
     
-    tests = [Test(config, documents=[], queries=[]) for config in configs]
-    
-    [print(test.engine) for test in tests]
-    ### TODO: invoke tests
-    
+    tests = [SQualityTest(config, documents=[], queries=[]) for config in configs]
+        
+    [test.parse() for test in tests]
+
+    # Ensure OpenAI prompt/response caching is enabled before evaluating    
+    # [test.evaluate() for test in tests]
 
 if __name__ == "__main__":
     sys.exit(main())
