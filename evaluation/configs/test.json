@@ -1,0 +1,20 @@
+[
+    {
+        "graphloom_config": {
+            "gl_enabled": true,
+            "gl_summ_enabled": true
+        }
+    },
+    {
+        "graphloom_config": {
+            "gl_enabled": false,
+            "gl_summ_enabled": false
+        }
+    },
+    {
+        "graphloom_config": {
+            "gl_enabled": true,
+            "gl_summ_enabled": false
+        }
+    }
+]
