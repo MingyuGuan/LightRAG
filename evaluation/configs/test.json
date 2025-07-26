@@ -3,18 +3,30 @@
         "graphloom_config": {
             "gl_enabled": true,
             "gl_summ_enabled": true
+        },
+        "test_config": {
+            "benchmark": "squality",
+            "input_file_path": "squality/data/v1-3/txt/test.jsonl"
         }
     },
     {
         "graphloom_config": {
             "gl_enabled": false,
             "gl_summ_enabled": false
+        },
+        "test_config": {
+            "benchmark": "squality",
+            "input_file_path": "squality/data/v1-3/txt/test.jsonl"
         }
     },
     {
         "graphloom_config": {
             "gl_enabled": true,
             "gl_summ_enabled": false
+        },
+        "test_config": {
+            "benchmark": "squality",
+            "input_file_path": "squality/data/v1-3/txt/test.jsonl"
         }
     }
 ]
