@@ -1,0 +1,164 @@
+**User 1: Beekeeper**
+
+* Task 1: Planning a new apiary
+    - Question 1: What are the key considerations for choosing a location for a new apiary?
+    - Question 2: How do different types of hive equipment affect bee health and productivity?
+    - Question 3: What are the benefits and drawbacks of using top-bar hives versus traditional Langstroth hives?
+    - Question 4: How can I ensure that my bees have access to a reliable source of nectar and pollen?
+    - Question 5: What are the best practices for integrating a new colony into an existing apiary?
+* Task 2: Managing pests and diseases
+    - Question 1: What are the most common pests and diseases that affect honey bees, and how can I prevent them?
+    - Question 2: How do I identify and treat varroa mites and other parasites?
+    - Question 3: What are the benefits and drawbacks of using integrated pest management (IPM) techniques?
+    - Question 4: How can I use natural methods to control pests and diseases in my apiary?
+    - Question 5: What are the long-term consequences of using chemical treatments in beekeeping?
+* Task 3: Harvesting honey and other products
+    - Question 1: What are the best practices for harvesting honey and other bee products?
+    - Question 2: How do I extract honey from the hive without damaging the comb?
+    - Question 3: What are the benefits and drawbacks of using different types of honey extractors?
+    - Question 4: How can I ensure that my honey is of high quality and meets market standards?
+    - Question 5: What are the regulations and laws governing the sale of honey and other bee products?
+* Task 4: Marketing and sales
+    - Question 1: How can I effectively market and sell my bee products to consumers?
+    - Question 2: What are the benefits and drawbacks of using online marketplaces versus local farmers' markets?
+    - Question 3: How can I price my products competitively while ensuring a fair profit margin?
+    - Question 4: What are the best practices for building a loyal customer base?
+    - Question 5: How can I use social media to promote my business and engage with customers?
+* Task 5: Business planning and finance
+    - Question 1: What are the key considerations for starting and running a successful beekeeping business?
+    - Question 2: How can I create a business plan and set financial goals for my apiary?
+    - Question 3: What are the benefits and drawbacks of different types of business structures (e.g. sole proprietorship, LLC)?
+    - Question 4: How can I manage cash flow and ensure financial stability in my business?
+    - Question 5: What are the tax implications of running a beekeeping business?
+
+**User 2: Environmental Scientist**
+
+* Task 1: Evaluating the environmental impact of beekeeping
+    - Question 1: What are the key environmental concerns associated with beekeeping (e.g. habitat loss, pesticide use)?
+    - Question 2: How can I assess the environmental impact of different beekeeping practices?
+    - Question 3: What are the benefits and drawbacks of using organic versus conventional beekeeping practices?
+    - Question 4: How can I use life cycle assessment (LCA) to evaluate the environmental impact of beekeeping?
+    - Question 5: What are the policy implications of beekeeping for environmental conservation?
+* Task 2: Understanding bee behavior and ecology
+    - Question 1: What are the key factors that influence bee behavior and ecology?
+    - Question 2: How can I use observational studies to understand bee behavior and ecology?
+    - Question 3: What are the benefits and drawbacks of using different types of bee hives (e.g. top-bar, Langstroth)?
+    - Question 4: How can I use modeling and simulation to predict bee behavior and ecology?
+    - Question 5: What are the implications of bee behavior and ecology for beekeeping practices?
+* Task 3: Developing sustainable beekeeping practices
+    - Question 1: What are the key considerations for developing sustainable beekeeping practices?
+    - Question 2: How can I use systems thinking to evaluate the sustainability of beekeeping practices?
+    - Question 3: What are the benefits and drawbacks of using different types of beekeeping equipment (e.g. top-bar, Langstroth)?
+    - Question 4: How can I use scenario planning to develop sustainable beekeeping practices?
+    - Question 5: What are the policy implications of sustainable beekeeping practices?
+* Task 4: Communicating with beekeepers and stakeholders
+    - Question 1: What are the key considerations for communicating with beekeepers and stakeholders?
+    - Question 2: How can I use different types of communication channels (e.g. social media, email) to engage with beekeepers and stakeholders?
+    - Question 3: What are the benefits and drawbacks of using different types of communication strategies (e.g. education, outreach)?
+    - Question 4: How can I use storytelling to communicate with beekeepers and stakeholders?
+    - Question 5: What are the implications of effective communication for beekeeping practices and policy?
+* Task 5: Evaluating the effectiveness of beekeeping practices
+    - Question 1: What are the key considerations for evaluating the effectiveness of beekeeping practices?
+    - Question 2: How can I use different types of evaluation methods (e.g. surveys, focus groups)?
+    - Question 3: What are the benefits and drawbacks of using different types of evaluation frameworks (e.g. logic models)?
+    - Question 4: How can I use data analysis to evaluate the effectiveness of beekeeping practices?
+    - Question 5: What are the implications of effective evaluation for beekeeping practices and policy?
+
+**User 3: Farmer**
+
+* Task 1: Integrating bees into a farming operation
+    - Question 1: What are the key considerations for integrating bees into a farming operation?
+    - Question 2: How can I use bees to pollinate crops and improve yields?
+    - Question 3: What are the benefits and drawbacks of using different types of bee hives (e.g. top-bar, Langstroth)?
+    - Question 4: How can I use bees to improve soil health and fertility?
+    - Question 5: What are the policy implications of integrating bees into a farming operation?
+* Task 2: Managing pests and diseases
+    - Question 1: What are the most common pests and diseases that affect honey bees, and how can I prevent them?
+    - Question 2: How do I identify and treat varroa mites and other parasites?
+    - Question 3: What are the benefits and drawbacks of using integrated pest management (IPM) techniques?
+    - Question 4: How can I use natural methods to control pests and diseases in my farm?
+    - Question 5: What are the long-term consequences of using chemical treatments in farming?
+* Task 3: Harvesting honey and other products
+    - Question 1: What are the best practices for harvesting honey and other bee products?
+    - Question 2: How do I extract honey from the hive without damaging the comb?
+    - Question 3: What are the benefits and drawbacks of using different types of honey extractors?
+    - Question 4: How can I ensure that my honey is of high quality and meets market standards?
+    - Question 5: What are the regulations and laws governing the sale of honey and other bee products?
+* Task 4: Marketing and sales
+    - Question 1: How can I effectively market and sell my bee products to consumers?
+    - Question 2: What are the benefits and drawbacks of using online marketplaces versus local farmers' markets?
+    - Question 3: How can I price my products competitively while ensuring a fair profit margin?
+    - Question 4: What are the best practices for building a loyal customer base?
+    - Question 5: How can I use social media to promote my business and engage with customers?
+* Task 5: Business planning and finance
+    - Question 1: What are the key considerations for starting and running a successful beekeeping business?
+    - Question 2: How can I create a business plan and set financial goals for my farm?
+    - Question 3: What are the benefits and drawbacks of different types of business structures (e.g. sole proprietorship, LLC)?
+    - Question 4: How can I manage cash flow and ensure financial stability in my business?
+    - Question 5: What are the tax implications of running a beekeeping business?
+
+**User 4: Food System Analyst**
+
+* Task 1: Evaluating the impact of beekeeping on food systems
+    - Question 1: What are the key considerations for evaluating the impact of beekeeping on food systems?
+    - Question 2: How can I use different types of analysis (e.g. life cycle assessment, input-output analysis) to evaluate the impact of beekeeping?
+    - Question 3: What are the benefits and drawbacks of using different types of beekeeping practices (e.g. organic, conventional)?
+    - Question 4: How can I use scenario planning to evaluate the potential impact of beekeeping on food systems?
+    - Question 5: What are the policy implications of beekeeping for food systems?
+* Task 2: Understanding bee behavior and ecology
+    - Question 1: What are the key factors that influence bee behavior and ecology?
+    - Question 2: How can I use observational studies to understand bee behavior and ecology?
+    - Question 3: What are the benefits and drawbacks of using different types of bee hives (e.g. top-bar, Langstroth)?
+    - Question 4: How can I use modeling and simulation to predict bee behavior and ecology?
+    - Question 5: What are the implications of bee behavior and ecology for beekeeping practices?
+* Task 3: Developing sustainable beekeeping practices
+    - Question 1: What are the key considerations for developing sustainable beekeeping practices?
+    - Question 2: How can I use systems thinking to evaluate the sustainability of beekeeping practices?
+    - Question 3: What are the benefits and drawbacks of using different types of beekeeping equipment (e.g. top-bar, Langstroth)?
+    - Question 4: How can I use scenario planning to develop sustainable beekeeping practices?
+    - Question 5: What are the policy implications of sustainable beekeeping practices?
+* Task 4: Communicating with beekeepers and stakeholders
+    - Question 1: What are the key considerations for communicating with beekeepers and stakeholders?
+    - Question 2: How can I use different types of communication channels (e.g. social media, email) to engage with beekeepers and stakeholders?
+    - Question 3: What are the benefits and drawbacks of using different types of communication strategies (e.g. education, outreach)?
+    - Question 4: How can I use storytelling to communicate with beekeepers and stakeholders?
+    - Question 5: What are the implications of effective communication for beekeeping practices and policy?
+* Task 5: Evaluating the effectiveness of beekeeping practices
+    - Question 1: What are the key considerations for evaluating the effectiveness of beekeeping practices?
+    - Question 2: How can I use different types of evaluation methods (e.g. surveys, focus groups)?
+    - Question 3: What are the benefits and drawbacks of using different types of evaluation frameworks (e.g. logic models)?
+    - Question 4: How can I use data analysis to evaluate the effectiveness of beekeeping practices?
+    - Question 5: What are the implications of effective evaluation for beekeeping practices and policy?
+
+**User 5: Educator**
+
+* Task 1: Developing educational materials for beekeeping
+    - Question 1: What are the key considerations for developing educational materials for beekeeping?
+    - Question 2: How can I use different types of educational formats (e.g. videos, workshops, online courses)?
+    - Question 3: What are the benefits and drawbacks of using different types of educational strategies (e.g. hands-on, lecture-based)?
+    - Question 4: How can I use storytelling to engage students and make beekeeping more accessible?
+    - Question 5: What are the implications of effective education for beekeeping practices and policy?
+* Task 2: Teaching beekeeping practices
+    - Question 1: What are the key considerations for teaching beekeeping practices?
+    - Question 2: How can I use different types of teaching methods (e.g. lectures, hands-on activities)?
+    - Question 3: What are the benefits and drawbacks of using different types of teaching strategies (e.g. group work, individualized instruction)?
+    - Question 4: How can I use case studies to illustrate key concepts in beekeeping?
+    - Question 5: What are the implications of effective teaching for beekeeping practices and policy?
+* Task 3: Evaluating the effectiveness of educational programs
+    - Question 1: What are the key considerations for evaluating the effectiveness of educational programs?
+    - Question 2: How can I use different types of evaluation methods (e.g. surveys, focus groups)?
+    - Question 3: What are the benefits and drawbacks of using different types of evaluation frameworks (e.g. logic models)?
+    - Question 4: How can I use data analysis to evaluate the effectiveness of educational programs?
+    - Question 5: What are the implications of effective evaluation for beekeeping practices and policy?
+* Task 4: Communicating with students and stakeholders
+    - Question 1: What are the key considerations for communicating with students and stakeholders?
+    - Question 2: How can I use different types of communication channels (e.g. social media, email) to engage with students and stakeholders?
+    - Question 3: What are the benefits and drawbacks of using different types of communication strategies (e.g. education, outreach)?
+    - Question 4: How can I use storytelling to communicate with students and stakeholders?
+    - Question 5: What are the implications of effective communication for beekeeping practices and policy?
+* Task 5: Developing a curriculum for beekeeping education
+    - Question 1: What are the key considerations for developing a curriculum for beekeeping education?
+    - Question 2: How can I use different types of curriculum design (e.g. top-down, bottom-up)?
+    - Question 3: What are the benefits and drawbacks of using different types of curriculum frameworks (e.g. standards-based)?
+    - Question 4: How can I use scenario planning to develop a curriculum for beekeeping education?
+    - Question 5: What are the implications of effective curriculum development for beekeeping practices and policy?

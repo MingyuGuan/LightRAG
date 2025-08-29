@@ -296,7 +296,12 @@ async def _merge_edges_then_upsert(
     already_description = []
     already_keywords = []
 
-    already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id, "rel")
+    # Pass "rel" node type only if the instance is of type NetworkXHeteroStorage
+    from lightrag.kg.networkx_gl_impl import NetworkXHeteroStorage
+    if isinstance(knowledge_graph_inst, NetworkXHeteroStorage):
+        already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id, "rel")
+    else:
+        already_edge = await knowledge_graph_inst.get_edge(src_id, tgt_id)
     # Handle the case where get_edge returns None or missing fields
     if already_edge:
         # Get weight with default 0.0 if missing

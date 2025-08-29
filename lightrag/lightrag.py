@@ -815,7 +815,7 @@ class LightRAG:
                             }
                         )
                     except Exception as e:
-                        logger.error(f"Failed to process document {doc_id}: {str(e)}")
+                        logger.exception(f"Failed to process document {doc_id}: {str(e)}")
                         await self.doc_status.upsert(
                             {
                                 doc_id: {
@@ -1655,14 +1655,14 @@ class LightRAG:
         try:
             # Reset node retrieval counts
             for node in self.chunk_entity_relation_graph._graph.nodes():
-                logger.info(f"Reset retrieval count for node: {node}")
+                #logger.info(f"Reset retrieval count for node: {node}")
                 if 'retrieval_count' in self.chunk_entity_relation_graph._graph.nodes[node]:
                     logger.info(f"Retrieval count for node: {node} is {self.chunk_entity_relation_graph._graph.nodes[node]['retrieval_count']}")
                     self.chunk_entity_relation_graph._graph.nodes[node]['retrieval_count'] = 0
 
             # Reset edge retrieval counts
             for edge in self.chunk_entity_relation_graph._graph.edges():
-                logger.info(f"Reset retrieval count for edge: {edge}")
+                #logger.info(f"Reset retrieval count for edge: {edge}")
                 if 'retrieval_count' in self.chunk_entity_relation_graph._graph.edges[edge]:
                     logger.info(f"Retrieval count for edge: {edge} is {self.chunk_entity_relation_graph._graph.edges[edge]['retrieval_count']}")
                     self.chunk_entity_relation_graph._graph.edges[edge]['retrieval_count'] = 0
