@@ -1,5 +1,6 @@
 [
     {
+        "name": "GraphLoom Full",
         "graphloom_config": {
             "gl_enabled": true,
             "gl_summ_enabled": true
@@ -10,6 +11,7 @@
         }
     },
     {
+        "name": "Base LightRAG",
         "graphloom_config": {
             "gl_enabled": false,
             "gl_summ_enabled": false
@@ -20,6 +22,7 @@
         }
     },
     {
+        "name": "GraphLoom No Summarization",
         "graphloom_config": {
             "gl_enabled": true,
             "gl_summ_enabled": false

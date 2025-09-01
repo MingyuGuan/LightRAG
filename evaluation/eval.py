@@ -1,8 +1,9 @@
+import asyncio
 import sys
 import argparse
 import os
 from evaluation.config import GraphLoomConfig
-from evaluation.test import Test, SQualityTest
+from evaluation.test import create_tests
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Evaluation script for LightRAG')
@@ -25,14 +26,11 @@ def main():
     args = parse_arguments()
     configs = GraphLoomConfig.parse_config_from_file(args.config)
     
-    print(configs)
-    
-    tests = [SQualityTest(config, documents=[], queries=[]) for config in configs]
-        
+    tests = create_tests(configs, limit=1)
+
     [test.parse() for test in tests]
 
-    # Ensure OpenAI prompt/response caching is enabled before evaluating    
-    # [test.evaluate() for test in tests]
+    asyncio.run(asyncio.gather(*[test.evaluate() for test in tests]))
 
 if __name__ == "__main__":
     sys.exit(main())

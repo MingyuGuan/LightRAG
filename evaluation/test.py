@@ -1,40 +1,60 @@
+import asyncio
+
+from pluggy import Result
+from tqdm.asyncio import tqdm as a_tqdm
+from tqdm import tqdm
 from evaluation.config import GraphLoomConfig
 from evaluation.engine import RAGEngine
-from typing import List
-from dataclasses import dataclass
+from typing import List, Tuple, Type, override
+from dataclasses import dataclass, asdict
 from typing import Dict, Any
 from pathlib import Path
 import json
 
 from lightrag.utils import logger
 
-
 @dataclass
 class Query:
     question: str
-    responses: List[str]
-
+    target_responses: List[str]
+    
+@dataclass
+class LLMOutput:
+    question: str
+    target_responses: List[str]
+    llm: str
 
 @dataclass
 class TestCase:
     name: str
     document: str
     queries: List[Query]
+    engine: RAGEngine
 
+    def reset_engine(self, config: GraphLoomConfig):
+        del self.engine
+        self.engine = RAGEngine(config)
+        logger.info("Reset RAG engine")
+        
+    def write_result(self, config: GraphLoomConfig, result: Result):
+        file = config.add_path(self.name) / "result.json"
+        with open(file, "w") as f:
+            outputs = [
+                asdict(output) for output in result.llm_output.values()
+            ]
+            json.dump(outputs, f)
 
 @dataclass
 class Result:
     test_case: TestCase
-    llm_output: str
+    llm_output: Dict[str, LLMOutput]
     metrics: Dict[str, Any]
 
-
 class Test:
-    def __init__(self, config: GraphLoomConfig, documents, queries):
+    def __init__(self, config: GraphLoomConfig, limit=None):
         self.config = config
-        self.documents = documents
-        self.queries = queries
-        self.engine = RAGEngine(config)
+        self.limit = limit
+        self.results: List[Result] = []
 
     def name(self) -> str:
         pass
@@ -42,19 +62,16 @@ class Test:
     def parse(self) -> List[TestCase]:
         pass
 
-    def evaluate(self) -> List[Result]:
+    async def evaluate(self) -> List[Result]:
         pass
 
-    def write_results(self) -> None:
-        result_file = Path(self.config.working_dir) / f"results-{self.name()}.json"
-        print(f"Writing results to {result_file}")
-        ### TODO:
-
-
 class SQualityTest(Test):
-    def name(self) -> str:
-        return "SQuality"
 
+    @staticmethod
+    def name() -> str:
+        return "squality"
+
+    @override
     def parse(self) -> List[TestCase]:
         test_file = Path(self.config.input_file_path)
         logger.info(f"Test file: {test_file}")
@@ -65,14 +82,16 @@ class SQualityTest(Test):
                 json.JSONDecoder().decode(line) for line in lines if line.strip()
             ]
 
+        _limit = self.limit if self.limit is not None else len(test_cases)
         self.tests = [
             TestCase(
                 name=test["metadata"]["passage_id"],
                 document=test["document"],
+                engine=RAGEngine(self.config, identifier=test["metadata"]["passage_id"]),
                 queries=[
                     Query(
                         question=question["question_text"],
-                        responses=[
+                        target_responses=[
                             response["response_text"]
                             for response in question["responses"]
                         ],
@@ -80,18 +99,65 @@ class SQualityTest(Test):
                     for question in test["questions"]
                 ],
             )
-            for test in test_cases
+            for test in tqdm(test_cases[:_limit])
         ]
 
         return self.tests
 
-    def evaluate(self) -> List[Result]:
-        results = []
-        for test_case in self.tests:
-            logger.info(f"Evaluating test case: {test_case.name}")
-            self.engine.engine.insert(test_case.document)
-            ### TODO:
-            # 1. Query RAG
-            # 2. Compute averaged metric against 4 sample answers
-            # 3. Add to results
+    @override
+    async def evaluate(self) -> List[Result]:
+        logger.info(f"Evaluating {len(self.tests)} test cases")
+        evaluate_tasks = [
+            asyncio.create_task(self.a_evaluate(test_case))
+            for test_case in self.tests
+        ]
+        results = await a_tqdm.gather(*evaluate_tasks)
+
+        logger.info(f"Evaluated test cases: {len(self.tests)}")
+        self.results = results
         return results
+    
+    async def a_evaluate(self, test_case: TestCase) -> Result:
+        logger.info(f"Evaluating test case: {test_case.name}")
+        await test_case.engine.insert(test_case.document)   # <-- insert all documents for this test case into the index
+        logger.info("Inserted document for test case {test_case.name} into index")
+        
+        responses = []
+        # synchronously query engine to emulate conversation
+        for query in test_case.queries:
+            response = await test_case.engine.query(query.question)
+            responses.append(response)
+            
+        # test_case.reset_engine(self.config)
+
+        query_response_pairs = zip(test_case.queries, responses)
+        result_dict = {
+            pair[0].question: LLMOutput(
+                question=pair[0].question,
+                target_responses=pair[0].target_responses,
+                llm=pair[1]
+            )
+            for pair in query_response_pairs
+        }
+
+        # TODO: Compute averaged metric against 4 sample answers
+        result = Result(test_case=test_case, llm_output=result_dict, metrics={})
+        test_case.write_result(self.config, result)
+        return result
+
+REGISTRY = {
+    test.name(): test for test in [SQualityTest]  # add more tests here
+}
+
+def get_test(name: str) -> Type[Test]:
+    if name in REGISTRY:
+        return REGISTRY[name]
+    raise ValueError(f"Test not found: {name}")
+
+def create_tests(configs: List[GraphLoomConfig], limit: int = None) -> List[Test]:
+    return [
+        get_test(config.benchmark)(config, limit=limit)
+        for config in configs
+    ]
+
+
