@@ -16,16 +16,14 @@ from evaluation.metric import Metric, MetricRegistry
 from evaluation.types import LLMOutput, Query
 from lightrag.utils import logger
 
+
 def serialize(metrics: List[Dict[str, Metric]]) -> List[str]:
     def serialize_inner(metric: Dict[str, Metric]) -> str:
-        return {
-            k: v.model_dump()
-            for k, v in metric.items()
-        }
-    return [
-        serialize_inner(metric) for metric in metrics
-    ]
-    
+        return {k: v.model_dump() for k, v in metric.items()}
+
+    return [serialize_inner(metric) for metric in metrics]
+
+
 @dataclass
 class TestCase:
     name: str
@@ -45,11 +43,13 @@ class TestCase:
             metrics = serialize(result.metrics)
             json.dump(outputs + metrics, f)
 
+
 @dataclass
 class Result:
     test_case: TestCase
     llm_output: Dict[str, LLMOutput]
     metrics: List[Dict[str, Metric]]
+
 
 class Test:
     def __init__(
@@ -61,7 +61,9 @@ class Test:
         self.config = config
         self.limit = limit
         self.results: List[Result] = []
-        self.instructor_client = InstructorClient()
+        self.instructor_client = InstructorClient(
+            model_name=self.config.model_config.evaluation_model
+        )
         self.metrics = metrics
 
     def name(self) -> str:

@@ -1,3 +1,4 @@
+from dataclasses_json import dataclass_json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, List
@@ -9,11 +10,19 @@ def create_dir(config_name: str) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
+@dataclass_json
+@dataclass
+class ModelConfig:
+    embedding_model: str = "text-embedding-3-small"
+    inference_model: str = "gpt-4o-mini"
+    evaluation_model: str = "gpt-4o-mini"
+
 @dataclass
 class EvaluationConfig:
     name: str
     input_file_path: str
     output_path: Path
+    model_config: ModelConfig
 
 @dataclass
 class GraphLoomConfig(EvaluationConfig):
@@ -26,13 +35,15 @@ class GraphLoomConfig(EvaluationConfig):
         try:
             gl_config = config["graphloom_config"]
             test_config = config["test_config"]
+            model_config = config["model_config"]
             return GraphLoomConfig(
                 name=config.get("name"),
                 gl_enabled=gl_config.get("gl_enabled", False),
                 gl_summ_enabled=gl_config.get("gl_summ_enabled", False),
                 input_file_path=test_config.get("input_file_path", None),
                 benchmark=test_config.get("benchmark", None),
-                output_path=create_dir(config.get("name"))
+                output_path=create_dir(config.get("name")),
+                model_config=ModelConfig.from_dict(model_config),
             )
         except Exception as e:
             raise ValueError(f"Error parsing GraphLoomConfig: {e}")
