@@ -18,9 +18,10 @@ RAG Engine
 class RAGEngine:
     
     def __init__(self, config: GraphLoomConfig, identifier: str):
+        self.config = config
         self.graphloom_enabled = config.gl_enabled
         self.graphloom_summary_enabled = config.gl_summ_enabled
-        
+    
         self.working_dir: Path = config.add_path(identifier)
         
         self.engine = LightRAG(
@@ -45,7 +46,12 @@ class RAGEngine:
         return await self.engine.aquery(query, param=QueryParam(mode="hybrid"))
 
     async def embedding_func(self, texts: list[str]) -> np.ndarray:
-        return await openai_embed(texts=texts)
+        return await openai_embed(
+            texts=texts,
+            model=self.config.model_config.embedding_model,
+            base_url=self.config.proxy.base_url,
+            api_key=self.config.proxy.api_key
+        )
     
     async def get_embedding_dim(self):
         test_text = ["This is a test sentence."]

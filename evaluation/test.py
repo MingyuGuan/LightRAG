@@ -62,7 +62,8 @@ class Test:
         self.limit = limit
         self.results: List[Result] = []
         self.instructor_client = InstructorClient(
-            model_name=self.config.model_config.evaluation_model
+            model_name=self.config.model_config.evaluation_model,
+            model_proxy=self.config.proxy
         )
         self.metrics = metrics
 

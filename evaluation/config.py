@@ -3,12 +3,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, List
 import json
+import os
 
 def create_dir(config_name: str) -> Path:
     dir_name = config_name.replace(" ", "_").lower()
     path = Path(f"./out/{dir_name}")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+@dataclass
+class ModelProxy:
+    api_key: str
+    base_url: str
 
 @dataclass_json
 @dataclass
@@ -23,6 +29,7 @@ class EvaluationConfig:
     input_file_path: str
     output_path: Path
     model_config: ModelConfig
+    proxy: ModelProxy
 
 @dataclass
 class GraphLoomConfig(EvaluationConfig):
@@ -32,6 +39,12 @@ class GraphLoomConfig(EvaluationConfig):
     
     @staticmethod
     def parse_config(config: Dict[str, Any]) -> 'GraphLoomConfig':
+        
+        proxy = ModelProxy(
+            api_key=os.getenv("API_KEY"),
+            base_url=os.getenv("LITELLM_PROXY_URL")
+        )
+        
         try:
             gl_config = config["graphloom_config"]
             test_config = config["test_config"]
@@ -44,6 +57,7 @@ class GraphLoomConfig(EvaluationConfig):
                 benchmark=test_config.get("benchmark", None),
                 output_path=create_dir(config.get("name")),
                 model_config=ModelConfig.from_dict(model_config),
+                proxy=proxy
             )
         except Exception as e:
             raise ValueError(f"Error parsing GraphLoomConfig: {e}")
