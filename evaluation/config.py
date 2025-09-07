@@ -44,7 +44,6 @@ class GraphLoomConfig(EvaluationConfig):
             api_key=os.getenv("API_KEY"),
             base_url=os.getenv("LITELLM_PROXY_URL")
         )
-        
         try:
             gl_config = config["graphloom_config"]
             test_config = config["test_config"]
