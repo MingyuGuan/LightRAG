@@ -1,7 +1,9 @@
+from dataclasses_json import dataclass_json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Any, List
 import json
+import os
 
 def create_dir(config_name: str) -> Path:
     dir_name = config_name.replace(" ", "_").lower()
@@ -10,10 +12,24 @@ def create_dir(config_name: str) -> Path:
     return path
 
 @dataclass
+class ModelProxy:
+    api_key: str
+    base_url: str
+
+@dataclass_json
+@dataclass
+class ModelConfig:
+    embedding_model: str = "text-embedding-3-small"
+    inference_model: str = "gpt-4o-mini"
+    evaluation_model: str = "gpt-4o-mini"
+
+@dataclass
 class EvaluationConfig:
     name: str
     input_file_path: str
     output_path: Path
+    model_config: ModelConfig
+    proxy: ModelProxy
 
 @dataclass
 class GraphLoomConfig(EvaluationConfig):
@@ -23,16 +39,24 @@ class GraphLoomConfig(EvaluationConfig):
     
     @staticmethod
     def parse_config(config: Dict[str, Any]) -> 'GraphLoomConfig':
+        
+        proxy = ModelProxy(
+            api_key=os.getenv("API_KEY"),
+            base_url=os.getenv("LITELLM_PROXY_URL")
+        )
         try:
             gl_config = config["graphloom_config"]
             test_config = config["test_config"]
+            model_config = config["model_config"]
             return GraphLoomConfig(
                 name=config.get("name"),
                 gl_enabled=gl_config.get("gl_enabled", False),
                 gl_summ_enabled=gl_config.get("gl_summ_enabled", False),
                 input_file_path=test_config.get("input_file_path", None),
                 benchmark=test_config.get("benchmark", None),
-                output_path=create_dir(config.get("name"))
+                output_path=create_dir(config.get("name")),
+                model_config=ModelConfig.from_dict(model_config),
+                proxy=proxy
             )
         except Exception as e:
             raise ValueError(f"Error parsing GraphLoomConfig: {e}")

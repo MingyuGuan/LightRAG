@@ -219,6 +219,31 @@ async def gpt_4o_mini_complete(
         history_messages=history_messages,
         **kwargs,
     )
+    
+async def litellm_complete(
+    prompt,
+    model_name: str,
+    base_url: str = None,
+    api_key: str = None,
+    system_prompt=None,
+    history_messages=None,
+    keyword_extraction=False,
+    **kwargs,
+) -> str:
+    if history_messages is None:
+        history_messages = []
+    keyword_extraction = kwargs.pop("keyword_extraction", None)
+    if keyword_extraction:
+        kwargs["response_format"] = GPTKeywordExtractionFormat
+    return await openai_complete_if_cache(
+        model_name,
+        prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        base_url=base_url,
+        api_key=api_key,
+        **kwargs,
+    )
 
 
 async def nvidia_openai_complete(
