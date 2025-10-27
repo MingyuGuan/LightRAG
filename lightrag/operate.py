@@ -1,6 +1,6 @@
 from __future__ import annotations
 from functools import partial
-
+import re
 import asyncio
 import json
 import json_repair
@@ -32,6 +32,10 @@ from .utils import (
     fix_tuple_delimiter_corruption,
     convert_to_user_format,
     generate_reference_list_from_chunks,
+    encode_string_by_tiktoken,
+    process_combine_contexts,
+    list_of_list_to_csv,
+    get_conversation_turns,
 )
 from .base import (
     BaseGraphStorage,
@@ -62,6 +66,7 @@ from dotenv import load_dotenv
 # the OS environment variables take precedence over the .env file
 load_dotenv(dotenv_path=".env", override=False)
 
+statistic_data = {"llm_call": 0, "llm_cache": 0, "embed_call": 0}
 
 def chunking_by_token_size(
     tokenizer: Tokenizer,
@@ -317,7 +322,7 @@ async def _summarize_descriptions(
     )
     return summary
 
-
+# graphloom
 async def _handle_single_entity_extraction(
     record_attributes: list[str],
     chunk_key: str,
@@ -388,8 +393,20 @@ async def _handle_single_entity_extraction(
             f"Entity extraction failed with unexpected error in chunk {chunk_key}: {e}"
         )
         return None
+    
+    # impl prior merge
+    # entity_type = clean_str(record_attributes[2].upper())
+    # entity_description = clean_str(record_attributes[3])
+    # entity_source_id = chunk_key
 
+    # return dict(
+    #     entity_name=entity_name,
+    #     entity_type=entity_type,
+    #     description=entity_description,
+    #     source_id=entity_source_id,
+    # )
 
+# graphloom
 async def _handle_single_relationship_extraction(
     record_attributes: list[str],
     chunk_key: str,
@@ -1286,6 +1303,65 @@ async def _rebuild_single_relationship(
         logger.error(error_msg)
         raise  # Re-raise exception
 
+# graphloom
+async def _handle_single_theme_extraction(
+    record_attributes: list[str],
+    chunk_key: str,
+):
+    if len(record_attributes) < 4 or record_attributes[0] != '"theme"':
+        return None
+    theme_name = sanitize_and_normalize_extracted_text(record_attributes[1].upper())
+    theme_description = sanitize_and_normalize_extracted_text(record_attributes[2])
+    # Clean the string and then parse it as a list of entity names
+    theme_entities_str = sanitize_and_normalize_extracted_text(record_attributes[3])
+    try:
+        theme_entities = json.loads(theme_entities_str)
+        # Convert all entity names to uppercase
+        theme_entities = [sanitize_and_normalize_extracted_text(entity.upper()) for entity in theme_entities]
+    except json.JSONDecodeError:
+        logger.warning(f"Failed to parse theme entities: {theme_entities_str}")
+        theme_entities = []
+    theme_source_id = chunk_key
+    return dict(
+        theme_name=theme_name,
+        description=theme_description,
+        entities=theme_entities,
+        source_id=theme_source_id,
+    )
+
+# graphloom
+async def _handle_single_theme_hierarchy_extraction(
+    record_attributes: list[str],
+    chunk_key: str,
+):
+    if len(record_attributes) < 5 or record_attributes[0] != '"theme_hierarchy"':
+        return None
+    parent_name = sanitize_and_normalize_extracted_text(record_attributes[1].upper())
+    child_name = sanitize_and_normalize_extracted_text(record_attributes[2].upper())
+    theme_hierarchy_description = sanitize_and_normalize_extracted_text(record_attributes[3])
+    theme_hierarchy_source_id = chunk_key
+    weight = (
+        float(record_attributes[-1]) if is_float_regex(record_attributes[-1]) else 1.0
+    )
+    return dict(
+        parent_name=parent_name,
+        child_name=child_name,
+        description=theme_hierarchy_description,
+        source_id=theme_hierarchy_source_id,
+        weight=weight,
+    )
+
+# graphloom
+async def _handle_summary_extraction(
+    record_attributes: list[str],
+    chunk_key: str,
+):
+    if len(record_attributes) < 2 or record_attributes[0] != '"summary"':
+        return None
+    return dict(
+        summary=sanitize_and_normalize_extracted_text(record_attributes[1]),
+        source_id=chunk_key,
+    )
 
 async def _merge_nodes_then_upsert(
     entity_name: str,
@@ -1437,13 +1513,13 @@ async def _merge_edges_then_upsert(
                     already_edge["description"].split(GRAPH_FIELD_SEP)
                 )
 
-            # Get keywords with empty string default if missing or None
-            if already_edge.get("keywords") is not None:
-                already_keywords.extend(
-                    split_string_by_multi_markers(
-                        already_edge["keywords"], [GRAPH_FIELD_SEP]
-                    )
+        # Get keywords with empty string default if missing or None
+        if already_edge.get("keywords") is not None:
+            already_keywords.extend(
+                split_string_by_multi_markers(
+                    already_edge["keywords"], [GRAPH_FIELD_SEP]
                 )
+            )
 
     # Process edges_data with None checks
     weight = sum([dp["weight"] for dp in edges_data] + already_weights)
@@ -1575,7 +1651,669 @@ async def _merge_edges_then_upsert(
 
     return edge_data
 
+# graphloom
+async def _merge_entities_then_upsert(
+    entity_name: str,
+    entities_data: list[dict],
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict,
+):
+    """Get existing nodes from knowledge graph use name,if exists, merge data, else create, then upsert."""
+    already_entity_types = []
+    already_source_ids = []
+    already_description = []
+    already_retrieval_count = 0
 
+    already_entity = await knowledge_graph_inst.get_node(entity_name, "ent")
+    if already_entity is not None:
+        already_entity_types.append(already_entity["entity_type"])
+        already_source_ids.extend(
+            split_string_by_multi_markers(already_entity["source_id"], [GRAPH_FIELD_SEP])
+        )
+        already_description.append(already_entity["description"])
+        already_retrieval_count = already_entity.get("retrieval_count", 0)
+    else:
+        logger.debug(f"No existing entity found for: {entity_name}")
+
+    entity_type = sorted(
+        Counter(
+            [dp["entity_type"] for dp in entities_data] + already_entity_types
+        ).items(),
+        key=lambda x: x[1],
+        reverse=True,
+    )[0][0]
+
+    description = GRAPH_FIELD_SEP.join(
+        sorted(set([dp["description"] for dp in entities_data] + already_description))
+    )
+
+    source_id = GRAPH_FIELD_SEP.join(
+        set([dp["source_id"] for dp in entities_data] + already_source_ids)
+    )
+
+    description = await _handle_entity_relation_summary(
+        entity_name, description, global_config
+    )
+
+    entity_data = dict(
+        type="ent",
+        entity_type=entity_type,
+        description=description,
+        source_id=source_id,
+        retrieval_count=already_retrieval_count,
+    )
+    await knowledge_graph_inst.upsert_node(
+        entity_name,
+        node_data=entity_data,
+        node_type="ent",
+    )
+    entity_data["entity_name"] = entity_name
+    
+    return entity_data
+
+# graphloom
+async def _merge_relationships_then_upsert(
+    src_id: str,
+    tgt_id: str,
+    relationships_data: list[dict],
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict,
+):
+    already_weights = []
+    already_source_ids = []
+    already_description = []
+    already_keywords = []
+    already_retrieval_count = 0
+
+    exists = await knowledge_graph_inst.has_edge(src_id, tgt_id, "rel")
+    if exists:
+        already_relationship = await knowledge_graph_inst.get_edge(src_id, tgt_id, "rel")
+        # Handle the case where get_edge returns None or missing fields
+        if already_relationship:
+            # Get weight with default 0.0 if missing
+            already_weights.append(already_relationship.get("weight", 0.0))
+
+            # Get source_id with empty string default if missing or None
+            if already_relationship.get("source_id") is not None:
+                already_source_ids.extend(
+                    split_string_by_multi_markers(
+                        already_relationship["source_id"], [GRAPH_FIELD_SEP]
+                    )
+                )
+
+            # Get description with empty string default if missing or None
+            if already_relationship.get("description") is not None:
+                already_description.append(already_relationship["description"])
+
+            # Get keywords with empty string default if missing or None
+            if already_relationship.get("keywords") is not None:
+                already_keywords.extend(
+                    split_string_by_multi_markers(
+                        already_relationship["keywords"], [GRAPH_FIELD_SEP]
+                    )
+                )
+            
+            already_retrieval_count = already_relationship.get("retrieval_count", 0)
+
+    # Process edges_data with None checks
+    weight = sum([dp["weight"] for dp in relationships_data] + already_weights)
+    description = GRAPH_FIELD_SEP.join(
+        sorted(
+            set(
+                [dp["description"] for dp in relationships_data if dp.get("description")]
+                + already_description
+            )
+        )
+    )
+    keywords = GRAPH_FIELD_SEP.join(
+        sorted(
+            set(
+                [dp["keywords"] for dp in relationships_data if dp.get("keywords")]
+                + already_keywords
+            )
+        )
+    )
+    source_id = GRAPH_FIELD_SEP.join(
+        set(
+            [dp["source_id"] for dp in relationships_data if dp.get("source_id")]
+            + already_source_ids
+        )
+    )
+
+    for need_insert_id in [src_id, tgt_id]:
+        if not (await knowledge_graph_inst.has_node(need_insert_id, "ent")):
+            await knowledge_graph_inst.upsert_node(
+                need_insert_id,
+                node_data={
+                    "type": "ent",
+                    "source_id": source_id,
+                    "description": description,
+                    "entity_type": '"UNKNOWN"',
+                },
+                node_type="ent",
+            )
+    description = await _handle_entity_relation_summary(
+        f"({src_id}, {tgt_id})", description, global_config
+    )
+    await knowledge_graph_inst.upsert_edge(
+        src_id,
+        tgt_id,
+        edge_data=dict(
+            type="rel",
+            weight=weight,
+            description=description,
+            keywords=keywords,
+            source_id=source_id,
+            retrieval_count=already_retrieval_count,
+        ),
+        edge_type="rel",
+    )
+
+    relationship_data = dict(
+        src_id=src_id,
+        tgt_id=tgt_id,
+        description=description,
+        keywords=keywords,
+    )
+
+    return relationship_data
+
+# graphloom
+async def _merge_themes_then_upsert(
+    theme_name: str,
+    themes_data: list[dict],
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict,
+):
+    already_source_ids = []
+    already_description = []
+    already_retrieval_count = 0
+
+    already_theme = await knowledge_graph_inst.get_node(theme_name, "the")
+    if already_theme is not None:
+        already_source_ids.extend(
+            split_string_by_multi_markers(already_theme["source_id"], [GRAPH_FIELD_SEP])
+        )
+        already_description.append(already_theme["description"])
+        already_retrieval_count = already_theme.get("retrieval_count", 0)
+    else:
+        logger.debug(f"No existing theme found for: {theme_name}")
+    
+    description = GRAPH_FIELD_SEP.join(
+        sorted(set([dp["description"] for dp in themes_data] + already_description))
+    )
+
+    source_id = GRAPH_FIELD_SEP.join(
+        set([dp["source_id"] for dp in themes_data] + already_source_ids)
+    )
+
+    description = await _handle_entity_relation_summary(
+        theme_name, description, global_config
+    )
+
+    theme_data = dict(
+        type="the",
+        description=description,
+        source_id=source_id,
+        retrieval_count=already_retrieval_count,
+    )
+    await knowledge_graph_inst.upsert_node(
+        theme_name,
+        node_data=theme_data,
+        node_type="the",
+    )
+    theme_data["theme_name"] = theme_name
+
+    # Handle Entities
+    existing_edges = await knowledge_graph_inst.get_node_edges(theme_name, "the", "the-ent") or []
+    already_entities = {e[1] for e in existing_edges} 
+    
+    entity_counts = defaultdict(float)
+    for dp in themes_data:
+        for ent in dp["entities"]:
+            entity_counts[ent] += 1.0
+    
+    for ent, count in entity_counts.items():
+        if not (await knowledge_graph_inst.has_node(ent, "ent")):
+            await knowledge_graph_inst.upsert_node(
+                ent,
+                node_data={
+                    "type": "ent",
+                    "source_id": source_id,
+                    "description": description, # use the theme description?
+                    "entity_type": '"UNKNOWN"',
+                },
+                node_type="ent",
+            )
+
+        edge_data = {"type": "the-ent"}
+        if ent in already_entities:
+            # Get existing edge and update weight
+            existing_edge = await knowledge_graph_inst.get_edge(theme_name, ent, "the-ent")
+            if existing_edge:
+                edge_data["weight"] = existing_edge.get("weight", 0.0) + count
+            else:
+                edge_data["weight"] = count
+        else:
+            edge_data["weight"] = count
+        
+        # Upsert the edge with updated weight
+        await knowledge_graph_inst.upsert_edge(
+            theme_name, 
+            ent, 
+            edge_data=edge_data, 
+            edge_type="the-ent"
+        )
+
+    return theme_data
+
+# graphloom
+async def _merge_theme_hierarchies_then_upsert(
+    parent_name: str,
+    child_name: str,
+    theme_hierarchies_data: list[dict],
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict,
+):
+    already_source_ids = []
+    already_description = []
+    already_weight = []
+    already_retrieval_count = 0
+    already_theme_hierarchy = await knowledge_graph_inst.get_edge(parent_name, child_name, 'the-hrc')
+    if already_theme_hierarchy is not None:
+        already_source_ids.extend(
+            split_string_by_multi_markers(already_theme_hierarchy["source_id"], [GRAPH_FIELD_SEP])
+        )
+        already_description.append(already_theme_hierarchy["description"])
+        already_weight.append(already_theme_hierarchy["weight"])
+        already_retrieval_count = already_theme_hierarchy.get("retrieval_count", 0)
+
+    weight = sum([dp["weight"] for dp in theme_hierarchies_data] + already_weight)
+    description = GRAPH_FIELD_SEP.join(
+        sorted(set([dp["description"] for dp in theme_hierarchies_data] + already_description))
+    )   
+    source_id = GRAPH_FIELD_SEP.join(
+        set([dp["source_id"] for dp in theme_hierarchies_data] + already_source_ids)
+    )
+    description = await _handle_entity_relation_summary(
+        f"({parent_name}, {child_name})", description, global_config
+    )
+    await knowledge_graph_inst.upsert_edge(
+        parent_name,
+        child_name,
+        edge_data=dict(
+            type="the-hrc",
+            weight=weight,
+            description=description,
+            source_id=source_id,
+            retrieval_count=already_retrieval_count,
+        ),
+        edge_type="the-hrc",
+    )
+
+    theme_hierarchy_data = dict(
+        parent_name=parent_name,
+        child_name=child_name,
+        description=description,
+        source_id=source_id,
+        weight=weight,
+    )
+
+    return theme_hierarchy_data
+
+# graphloom
+async def extract_gl_kg(
+    chunks: dict[str, TextChunkSchema],
+    knowledge_graph_inst: BaseGraphStorage,
+    entity_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    theme_vdb: BaseVectorStorage,
+    theme_hierarchy_vdb: BaseVectorStorage,
+    summaries_kvs: BaseKVStorage,
+    global_config: dict[str, str],
+    llm_response_cache: BaseKVStorage | None = None,
+) -> list:   
+    use_llm_func: callable = global_config["llm_model_func"]
+    entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
+    enable_llm_cache_for_entity_extract: bool = global_config[
+        "enable_llm_cache_for_entity_extract"
+    ]
+
+    ordered_chunks = list(chunks.items())
+    # add language and example number params to prompt
+    language = global_config["addon_params"].get(
+        "language", PROMPTS["DEFAULT_LANGUAGE"]
+    )
+    entity_types = global_config["addon_params"].get(
+        "entity_types", PROMPTS["DEFAULT_ENTITY_TYPES"]
+    )
+    example_number = global_config["addon_params"].get("example_number", None)
+    if example_number and example_number < len(PROMPTS["kg_extraction_examples"]):
+        examples = "\n".join(
+            PROMPTS["kg_extraction_examples"][: int(example_number)]
+        )
+    else:
+        examples = "\n".join(PROMPTS["kg_extraction_examples"])
+
+    example_context_base = dict(
+        tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+        record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
+        completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+        entity_types=",".join(entity_types),
+        language=language,
+    )
+    # add example's format
+    examples = examples.format(**example_context_base)
+
+    kg_extract_prompt = PROMPTS["kg_extraction"]
+    context_base = dict(
+        tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+        record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
+        completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+        entity_types=",".join(entity_types),
+        examples=examples,
+        language=language,
+    )
+
+    continue_prompt = PROMPTS["entiti_continue_extraction"]
+    if_loop_prompt = PROMPTS["entiti_if_loop_extraction"]
+
+    already_processed = 0
+    already_entities = 0
+    already_relations = 0
+    already_themes = 0
+    already_theme_hierarchies = 0
+
+    async def _user_llm_func_with_cache(
+        input_text: str, history_messages: list[dict[str, str]] = None
+    ) -> str:
+        if enable_llm_cache_for_entity_extract and llm_response_cache:
+            if history_messages:
+                history = json.dumps(history_messages, ensure_ascii=False)
+                _prompt = history + "\n" + input_text
+            else:
+                _prompt = input_text
+
+            arg_hash = compute_args_hash(_prompt)
+            cached_return, _1, _2, _3 = await handle_cache(
+                llm_response_cache,
+                arg_hash,
+                _prompt,
+                "default",
+                cache_type="extract",
+                force_llm_cache=True,
+            )
+            if cached_return:
+                logger.debug(f"Found cache for {arg_hash}")
+                statistic_data["llm_cache"] += 1
+                return cached_return
+            statistic_data["llm_call"] += 1
+            if history_messages:
+                res: str = await use_llm_func(
+                    input_text, history_messages=history_messages
+                )
+            else:
+                res: str = await use_llm_func(input_text)
+            await save_to_cache(
+                llm_response_cache,
+                CacheData(
+                    args_hash=arg_hash,
+                    content=res,
+                    prompt=_prompt,
+                    cache_type="extract",
+                ),
+            )
+            return res
+
+        if history_messages:
+            return await use_llm_func(input_text, history_messages=history_messages)
+        else:
+            return await use_llm_func(input_text)
+
+    async def _process_single_content(chunk_key_dp: tuple[str, TextChunkSchema]):
+        """ "Prpocess a single chunk
+        Args:
+            chunk_key_dp (tuple[str, TextChunkSchema]):
+                ("chunck-xxxxxx", {"tokens": int, "content": str, "full_doc_id": str, "chunk_order_index": int})
+        """
+        nonlocal already_processed, already_entities, already_relations, already_themes, already_theme_hierarchies
+        chunk_key = chunk_key_dp[0]
+        chunk_dp = chunk_key_dp[1]
+        content = chunk_dp["content"]
+        # hint_prompt = entity_extract_prompt.format(**context_base, input_text=content)
+        hint_prompt = kg_extract_prompt.format(
+            **context_base, input_text="{input_text}"
+        ).format(**context_base, input_text=content)
+        
+        final_result = await _user_llm_func_with_cache(hint_prompt)       
+        history = pack_user_ass_to_openai_messages(hint_prompt, final_result)
+        for now_glean_index in range(entity_extract_max_gleaning):
+            glean_result = await _user_llm_func_with_cache(
+                continue_prompt, history_messages=history
+            )
+
+            history += pack_user_ass_to_openai_messages(continue_prompt, glean_result)
+            final_result += glean_result
+            if now_glean_index == entity_extract_max_gleaning - 1:
+                break
+
+            if_loop_result: str = await _user_llm_func_with_cache(
+                if_loop_prompt, history_messages=history
+            )
+            if_loop_result = if_loop_result.strip().strip('"').strip("'").lower()
+            if if_loop_result != "yes":
+                break
+
+        records = split_string_by_multi_markers(
+            final_result,
+            [context_base["record_delimiter"], context_base["completion_delimiter"]],
+        )
+        
+        maybe_nodes = defaultdict(list)
+        maybe_edges = defaultdict(list)
+        maybe_themes = defaultdict(list)
+        maybe_theme_hierarchies = defaultdict(list)
+        maybe_summaries = dict()
+        for record in records:
+            record = re.search(r"\((.*)\)", record)
+            if record is None:
+                continue
+            record = record.group(1)
+            record_attributes = split_string_by_multi_markers(
+                record, [context_base["tuple_delimiter"]]
+            )
+            if_entities = await _handle_single_entity_extraction(
+                record_attributes, chunk_key
+            )
+            if if_entities is not None:
+                maybe_nodes[if_entities["entity_name"]].append(if_entities)
+                continue
+
+            if_relation = await _handle_single_relationship_extraction(
+                record_attributes, chunk_key
+            )
+            if if_relation is not None:
+                maybe_edges[(if_relation["src_id"], if_relation["tgt_id"])].append(
+                    if_relation
+                )
+            
+            if_theme = await _handle_single_theme_extraction(
+                record_attributes, chunk_key
+            )
+            if if_theme is not None:
+                maybe_themes[if_theme["theme_name"]].append(if_theme)
+                continue    
+            
+            if_theme_hierarchy = await _handle_single_theme_hierarchy_extraction(
+                record_attributes, chunk_key
+            )
+            if if_theme_hierarchy is not None:
+                maybe_theme_hierarchies[(if_theme_hierarchy["parent_name"], if_theme_hierarchy["child_name"])].append(if_theme_hierarchy)
+                continue
+            
+            if_summary = await _handle_summary_extraction(
+                record_attributes, chunk_key
+            )
+            if if_summary is not None:
+                maybe_summaries = if_summary
+                continue
+            
+        already_processed += 1
+        already_entities += len(maybe_nodes)
+        already_relations += len(maybe_edges)
+        already_themes += len(maybe_themes)
+        already_theme_hierarchies += len(maybe_theme_hierarchies)
+
+        logger.debug(
+            f"Processed {already_processed} chunks, {already_entities} entities(duplicated), {already_relations} relations(duplicated), {already_themes} themes(duplicated), {already_theme_hierarchies} theme_hierarchies(duplicated)\r",
+        )
+        return dict(maybe_nodes), dict(maybe_edges), dict(maybe_themes), dict(maybe_theme_hierarchies), maybe_summaries
+
+    tasks = [_process_single_content(c) for c in ordered_chunks]
+    results = await asyncio.gather(*tasks)
+
+    maybe_nodes = defaultdict(list)
+    maybe_edges = defaultdict(list)
+    maybe_themes = defaultdict(list)
+    maybe_theme_hierarchies = defaultdict(list)
+    maybe_summaries = defaultdict(str)
+    for m_nodes, m_edges, m_themes, m_theme_hierarchies, summary in results:
+        for k, v in m_nodes.items():
+            maybe_nodes[k].extend(v)
+        for k, v in m_edges.items():
+            maybe_edges[tuple(sorted(k))].extend(v)
+        for k, v in m_themes.items():
+            maybe_themes[k].extend(v)
+        for k, v in m_theme_hierarchies.items():
+            maybe_theme_hierarchies[tuple(sorted(k))].extend(v)
+        if "summary" in summary and "source_id" in summary:
+            maybe_summaries[summary["source_id"]] = summary["summary"]
+
+    all_entities_data = await asyncio.gather(
+        *[
+            _merge_entities_then_upsert(k, v, knowledge_graph_inst, global_config)
+            for k, v in maybe_nodes.items()
+        ]
+    )
+
+    all_relationships_data = await asyncio.gather(
+        *[
+            _merge_relationships_then_upsert(k[0], k[1], v, knowledge_graph_inst, global_config)
+            for k, v in maybe_edges.items()
+        ]
+    )
+
+    all_themes_data = await asyncio.gather(
+        *[
+            _merge_themes_then_upsert(k, v, knowledge_graph_inst, global_config)
+            for k, v in maybe_themes.items()
+        ]
+    )
+
+    all_theme_hierarchies_data = await asyncio.gather(
+        *[
+            _merge_theme_hierarchies_then_upsert(k[0], k[1], v, knowledge_graph_inst, global_config)
+            for k, v in maybe_theme_hierarchies.items()
+        ]
+    )
+        
+    if not (all_entities_data or all_relationships_data or all_themes_data or all_theme_hierarchies_data):
+        logger.info("Didn't extract any data (entities, relationships, themes, or theme hierarchies).")
+        return
+
+    # Log missing data types
+    missing_types = []
+    if not all_entities_data:
+        missing_types.append("entities")
+    if not all_relationships_data:
+        missing_types.append("relationships")
+    if not all_themes_data:
+        missing_types.append("themes")
+    if not all_theme_hierarchies_data:
+        missing_types.append("theme hierarchies")
+
+    if missing_types:
+        logger.info(f"Didn't extract any {', '.join(missing_types)}")
+
+    # logger.info(
+    #     f"New data extracted: entities:{all_entities_data}, relationships:{all_relationships_data}, "
+    #     f"themes:{all_themes_data}, theme_hierarchies:{all_theme_hierarchies_data}"
+    # )
+    
+    if entity_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["entity_name"], prefix="ent-"): {
+                "content": dp["entity_name"] + dp["description"],
+                "entity_name": dp["entity_name"],
+            }
+            for dp in all_entities_data
+        }
+        await entity_vdb.upsert(data_for_vdb)
+
+    if relationships_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["src_id"] + dp["tgt_id"], prefix="rel-"): {
+                "src_id": dp["src_id"],
+                "tgt_id": dp["tgt_id"],
+                "content": dp["keywords"]
+                + dp["src_id"]
+                + dp["tgt_id"]
+                + dp["description"],
+                "metadata": {
+                    "created_at": dp.get("metadata", {}).get("created_at", time.time())
+                },
+            }
+            for dp in all_relationships_data
+        }
+        await relationships_vdb.upsert(data_for_vdb)
+
+    if theme_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["theme_name"], prefix="the-"): {
+                "content": dp["theme_name"] + dp["description"],
+                "theme_name": dp["theme_name"],
+            }
+            for dp in all_themes_data
+        }
+        await theme_vdb.upsert(data_for_vdb)
+
+    if theme_hierarchy_vdb is not None:
+        data_for_vdb = {
+            compute_mdhash_id(dp["parent_name"] + dp["child_name"], prefix="the-hrc-"): {
+                "content": dp["parent_name"] + dp["child_name"] + dp["description"],
+                "parent_name": dp["parent_name"],
+                "child_name": dp["child_name"],
+            }
+            for dp in all_theme_hierarchies_data
+        }
+        await theme_hierarchy_vdb.upsert(data_for_vdb)
+            
+    if summaries_kvs is not None:
+        data_for_vdb = {
+            compute_mdhash_id(source_id, prefix="sum-"): {
+                "source_id": source_id,
+                "summary": summary,
+            }
+            for source_id, summary in maybe_summaries.items()
+        }
+        await summaries_kvs.upsert(data_for_vdb)
+    
+        ### also upsert the combined summary to the kv store. Call LLM to generate a summary for the whole document
+        combined_summary = "\n".join(
+            [summary for summary in maybe_summaries.values()]
+        )
+        combined_summary_prompt = PROMPTS["COMBINED_SUMMARY_GENERATION"].format(
+            data=combined_summary
+        )
+        combined_summary = await use_llm_func(combined_summary_prompt, max_tokens=2000)
+        await summaries_kvs.upsert(
+            {
+                "combined-summary": combined_summary
+            }
+        )
+        
+        return results
+        
 async def merge_nodes_and_edges(
     chunk_results: list,
     knowledge_graph_inst: BaseGraphStorage,
@@ -2235,6 +2973,130 @@ async def extract_entities(
     # Return the chunk_results for later processing in merge_nodes_and_edges
     return chunk_results
 
+# graphloom
+async def gl_kg_query(
+    query: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    themes_vdb: BaseVectorStorage,
+    theme_hierarchies_vdb: BaseVectorStorage,
+    summaries_kvs: BaseKVStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+    global_config: dict[str, str],
+    hashing_kv: BaseKVStorage | None = None,
+    system_prompt: str | None = None,
+) -> str:
+    # Handle cache
+    use_model_func = global_config["llm_model_func"]
+    args_hash = compute_args_hash(query_param.mode, query, cache_type="query")
+    cached_response, quantized, min_val, max_val = await handle_cache(
+        hashing_kv, args_hash, query, query_param.mode, cache_type="query"
+    )
+    if cached_response is not None:
+        return cached_response
+    
+    combined_summary = await summaries_kvs.get_by_id("combined-summary")
+
+    # Extract keywords using extract_keywords_only function which already supports conversation history
+    hl_keywords, ll_keywords = await extract_keywords_only(
+        query, query_param, global_config, hashing_kv, combined_summary
+    )
+
+    logger.debug(f"High-level keywords: {hl_keywords}")
+    logger.debug(f"Low-level  keywords: {ll_keywords}")
+
+    # Handle empty keywords
+    if hl_keywords == [] and ll_keywords == []:
+        logger.warning("low_level_keywords and high_level_keywords is empty")
+        return PROMPTS["fail_response"]
+    if ll_keywords == [] and query_param.mode in ["local", "hybrid"]:
+        logger.warning(
+            "low_level_keywords is empty, switching from %s mode to global mode",
+            query_param.mode,
+        )
+        query_param.mode = "global"
+    if hl_keywords == [] and query_param.mode in ["global", "hybrid"]:
+        logger.warning(
+            "high_level_keywords is empty, switching from %s mode to local mode",
+            query_param.mode,
+        )
+        query_param.mode = "local"
+
+    ll_keywords_str = ", ".join(ll_keywords) if ll_keywords else ""
+    hl_keywords_str = ", ".join(hl_keywords) if hl_keywords else ""
+
+    # Build context
+    context = await _build_gl_query_context(
+        ll_keywords_str,
+        hl_keywords_str,
+        knowledge_graph_inst,
+        entities_vdb,
+        relationships_vdb,
+        themes_vdb,
+        theme_hierarchies_vdb,
+        summaries_kvs,
+        text_chunks_db,
+        query_param,
+    )
+
+    if query_param.only_need_context:
+        return context
+    if context is None:
+        return PROMPTS["fail_response"]
+
+    # Process conversation history
+    history_context = ""
+    if query_param.conversation_history:
+        history_context = get_conversation_turns(
+            query_param.conversation_history, query_param.history_turns
+        )
+
+    sys_prompt_temp = system_prompt if system_prompt else PROMPTS["rag_response"]
+    sys_prompt = sys_prompt_temp.format(
+        context_data=context,
+        response_type=query_param.response_type,
+        history=history_context,
+    )
+
+    if query_param.only_need_prompt:
+        return sys_prompt
+
+    len_of_prompts = len(encode_string_by_tiktoken(query + sys_prompt))
+    logger.debug(f"[kg_query]Prompt Tokens: {len_of_prompts}")
+
+    response = await use_model_func(
+        query,
+        system_prompt=sys_prompt,
+        stream=query_param.stream,
+    )
+    if isinstance(response, str) and len(response) > len(sys_prompt):
+        response = (
+            response.replace(sys_prompt, "")
+            .replace("user", "")
+            .replace("model", "")
+            .replace(query, "")
+            .replace("<system>", "")
+            .replace("</system>", "")
+            .strip()
+        )
+
+    # Save to cache
+    await save_to_cache(
+        hashing_kv,
+        CacheData(
+            args_hash=args_hash,
+            content=response,
+            prompt=query,
+            quantized=quantized,
+            min_val=min_val,
+            max_val=max_val,
+            mode=query_param.mode,
+            cache_type="query",
+        ),
+    )
+    return response
 
 async def kg_query(
     query: str,
@@ -2480,6 +3342,7 @@ async def extract_keywords_only(
     param: QueryParam,
     global_config: dict[str, str],
     hashing_kv: BaseKVStorage | None = None,
+    combined_summary: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """
     Extract high-level and low-level keywords from the given 'text' using the LLM.
@@ -2640,6 +3503,114 @@ async def _get_vector_context(
         logger.error(f"Error in _get_vector_context: {e}")
         return []
 
+# graphloom
+async def _build_gl_query_context(
+    ll_keywords: str,
+    hl_keywords: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    themes_vdb: BaseVectorStorage,
+    theme_hierarchies_vdb: BaseVectorStorage,
+    summaries_kvs: BaseKVStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+):
+    if query_param.mode == "local":
+        # TODO: local search should also return themes?
+        entities_context, relations_context, text_units_context = await _get_local_data(
+            ll_keywords,
+            knowledge_graph_inst,
+            entities_vdb,
+            relationships_vdb,
+            text_chunks_db,
+            query_param,
+        )
+    elif query_param.mode == "global":
+        themes_context, entities_context, relations_context, text_units_context = await _get_global_data(
+            hl_keywords,
+            knowledge_graph_inst,
+            themes_vdb,
+            text_chunks_db,
+            query_param,
+        )
+    else: 
+        ll_data, hl_data = await asyncio.gather(
+            _get_local_data(
+                ll_keywords,
+                knowledge_graph_inst,
+                entities_vdb,
+                relationships_vdb,
+                text_chunks_db,
+                query_param,
+            ),
+            _get_global_data(
+                hl_keywords,
+                knowledge_graph_inst,
+                themes_vdb,
+                text_chunks_db,
+                query_param,
+            ),
+        )
+
+        (
+            ll_entities_context,
+            ll_relations_context,
+            ll_text_units_context,
+        ) = ll_data
+
+        (
+            themes_context,
+            hl_entities_context,
+            hl_relations_context,
+            hl_text_units_context,
+        ) = hl_data
+
+        
+        entities_context, relations_context, text_units_context = combine_contexts(
+            [hl_entities_context, ll_entities_context],
+            [hl_relations_context, ll_relations_context],
+            [hl_text_units_context, ll_text_units_context],
+        )
+    # not necessary to use LLM to generate a response
+    if not entities_context.strip() and not relations_context.strip():
+        return None
+
+    if query_param.mode == "local":
+        result = f"""
+        -----Entities-----
+        ```csv
+        {entities_context}
+        ```
+        -----Relationships-----
+        ```csv
+        {relations_context}
+        ```
+        -----Sources-----
+        ```csv
+        {text_units_context}
+        ```
+        """.strip()
+    else:
+        result = f"""
+        -----Themes-----
+        ```csv
+        {themes_context}
+        ```
+        -----Entities-----
+        ```csv
+        {entities_context}
+        ```
+        -----Relationships-----
+        ```csv
+        {relations_context}
+        ```
+        -----Sources-----
+        ```csv
+        {text_units_context}
+        ```
+        """.strip()
+    return result
 
 async def _perform_kg_search(
     query: str,
@@ -2808,6 +3779,24 @@ async def _perform_kg_search(
         "chunk_tracking": chunk_tracking,
         "query_embedding": query_embedding,
     }
+    
+def combine_contexts(entities, relationships, sources):
+    # Function to extract entities, relationships, and sources from context strings
+    hl_entities, ll_entities = entities[0], entities[1]
+    hl_relationships, ll_relationships = relationships[0], relationships[1]
+    hl_sources, ll_sources = sources[0], sources[1]
+    # Combine and deduplicate the entities
+    combined_entities = process_combine_contexts(hl_entities, ll_entities)
+
+    # Combine and deduplicate the relationships
+    combined_relationships = process_combine_contexts(
+        hl_relationships, ll_relationships
+    )
+
+    # Combine and deduplicate the sources
+    combined_sources = process_combine_contexts(hl_sources, ll_sources)
+
+    return combined_entities, combined_relationships, combined_sources
 
 
 async def _apply_token_truncation(
@@ -3381,6 +4370,129 @@ async def _build_query_context(
 
     return QueryContextResult(context=context, raw_data=raw_data)
 
+# graphloom (TODO: should also direct match relationships)
+async def _get_local_data(
+    keywords: str,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+):
+    # get similar entities
+    logger.info(
+        f"Query nodes: {keywords}, top_k: {query_param.top_k}, cosine: {entities_vdb.cosine_better_than_threshold}"
+    )
+    results = await entities_vdb.query(keywords, top_k=query_param.top_k)
+    if not len(results):
+        return "", "", ""
+    
+    # get entity information
+    entities_data, entity_degrees = await asyncio.gather(
+        asyncio.gather(
+            *[knowledge_graph_inst.get_node(r["entity_name"], "ent") for r in results]
+        ),
+        asyncio.gather(
+            *[knowledge_graph_inst.node_degree(r["entity_name"], "ent") for r in results]
+        ),
+    )
+
+    if not all([n is not None for n in entities_data]):
+        logger.warning("Some entities are missing, maybe the storage is damaged")
+
+    entities_data = [
+        {**n, "entity_name": k["entity_name"], "rank": d}
+        for k, n, d in zip(results, entities_data, entity_degrees)
+        if n is not None
+    ]
+
+    # Increment retrieval counts for entities
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_retrieval_count(e["entity_name"], "ent")
+        for e in entities_data
+    ])
+
+    # get text chunks and relationships associated with entities
+    use_text_units, use_relations = await asyncio.gather(
+        _gl_find_most_related_text_units_from_entities(
+            entities_data, query_param, text_chunks_db, knowledge_graph_inst
+        ),
+        _gl_find_most_related_relations_from_entities(
+            entities_data, query_param, knowledge_graph_inst
+        ),
+    )
+
+    # Increment retrieval counts for relationships
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_edge_retrieval_count(r["src_tgt"][0], r["src_tgt"][1], "rel")
+        for r in use_relations
+    ])
+
+    len_entities = len(entities_data)
+    entities_data = truncate_list_by_token_size(
+        entities_data,
+        key=lambda x: x["description"],
+        max_token_size=query_param.max_token_for_local_context,
+    )
+    logger.debug(
+        f"Truncate entities from {len_entities} to {len(entities_data)} (max tokens:{query_param.max_token_for_local_context})"
+    )
+
+    logger.info(
+        f"Local query uses {len(entities_data)} entites, {len(use_relations)} relations, {len(use_text_units)} chunks"
+    )
+
+    # build prompt
+    entites_section_list = [["id", "entity", "type", "description", "rank"]]
+    for i, e in enumerate(entities_data):
+        entites_section_list.append(
+            [
+                i,
+                e["entity_name"],
+                e.get("entity_type", "UNKNOWN"),
+                e.get("description", "UNKNOWN"),
+                e["rank"],
+            ]
+        )
+    entities_context = list_of_list_to_csv(entites_section_list)
+
+    relations_section_list = [
+        [
+            "id",
+            "source",
+            "target",
+            "description",
+            "keywords",
+            "weight",
+            "rank",
+            "created_at",
+        ]
+    ]
+    for i, e in enumerate(use_relations):
+        created_at = e.get("created_at", "UNKNOWN")
+        # Convert timestamp to readable format
+        if isinstance(created_at, (int, float)):
+            created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+        relations_section_list.append(
+            [
+                i,
+                e["src_tgt"][0],
+                e["src_tgt"][1],
+                e["description"],
+                e["keywords"],
+                e["weight"],
+                e["rank"],
+                created_at,
+            ]
+        )
+    relations_context = list_of_list_to_csv(relations_section_list)
+
+    text_units_section_list = [["id", "content"]]
+    for i, t in enumerate(use_text_units):
+        text_units_section_list.append([i, t["content"]])
+    text_units_context = list_of_list_to_csv(text_units_section_list)
+    logger.debug(f"Local Search: Gathered {len(entities_context)} entities, {len(relations_context)} relations, and {len(text_units_context)} text units")
+    return entities_context, relations_context, text_units_context
 
 async def _get_node_data(
     query: str,
@@ -3438,7 +4550,585 @@ async def _get_node_data(
     # Entities are sorted by cosine similarity
     # Relations are sorted by rank + weight
     return node_datas, use_relations
+    
+    ### impl prior merge
+    # build prompt
+    # entites_section_list = [["id", "entity", "type", "description", "rank"]]
+    # for i, n in enumerate(node_datas):
+    #     entites_section_list.append(
+    #         [
+    #             i,
+    #             n["entity_name"],
+    #             n.get("entity_type", "UNKNOWN"),
+    #             n.get("description", "UNKNOWN"),
+    #             n["rank"],
+    #         ]
+    #     )
+    # entities_context = list_of_list_to_csv(entites_section_list)
 
+    # relations_section_list = [
+    #     [
+    #         "id",
+    #         "source",
+    #         "target",
+    #         "description",
+    #         "keywords",
+    #         "weight",
+    #         "rank",
+    #         "created_at",
+    #     ]
+    # ]
+    # for i, e in enumerate(use_relations):
+    #     created_at = e.get("created_at", "UNKNOWN")
+    #     # Convert timestamp to readable format
+    #     if isinstance(created_at, (int, float)):
+    #         created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+    #     relations_section_list.append(
+    #         [
+    #             i,
+    #             e["src_tgt"][0],
+    #             e["src_tgt"][1],
+    #             e["description"],
+    #             e["keywords"],
+    #             e["weight"],
+    #             e["rank"],
+    #             created_at,
+    #         ]
+    #     )
+    # relations_context = list_of_list_to_csv(relations_section_list)
+
+    # text_units_section_list = [["id", "content"]]
+    # for i, t in enumerate(use_text_units):
+    #     text_units_section_list.append([i, t["content"]])
+    # text_units_context = list_of_list_to_csv(text_units_section_list)
+    # return entities_context, relations_context, text_units_context
+
+# graphloom (local)
+async def _gl_find_most_related_text_units_from_entities(
+    entities_data: list[dict],
+    query_param: QueryParam,
+    text_chunks_db: BaseKVStorage,
+    knowledge_graph_inst: BaseGraphStorage,
+):
+    """Find the most related text units from entities.
+ 
+    The selection process works as follows:
+    1. Collect all text units directly associated with the input entities
+    2. Gather all one-hop related entities (entities directly connected to input entities)
+    3. Find text units that are associated with both the input entities and their one-hop neighbors
+    4. Rank text units based on:
+       - Their original order in the input entities list (preserving document context)
+       - The number of relationships they participate in (more relationships = higher relevance)
+       - The retrieval_count sum of relationships they participate in (more frequently retrieved = higher relevance)
+    5. Truncate the results to fit within token limits
+    """
+
+    text_units = [
+        split_string_by_multi_markers(e["source_id"], [GRAPH_FIELD_SEP])
+        for e in entities_data  
+    ]
+    relationships = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(e["entity_name"], "ent", "rel") for e in entities_data]
+    )
+    all_one_hop_entities = set()
+    for cur_rels in relationships:
+        if not cur_rels:
+            continue
+        all_one_hop_entities.update([r[1] for r in cur_rels])
+
+    all_one_hop_entities = list(all_one_hop_entities)
+    all_one_hop_entities_data = await asyncio.gather(
+        *[knowledge_graph_inst.get_node(e, "ent") for e in all_one_hop_entities]
+    )
+
+    # Add null check for node data
+    # all_one_hop_text_units_lookup = {
+    #     "entity_name": {"chunk1", "chunk2", "chunk3"}  # Set of chunk IDs
+    # }
+    all_one_hop_text_units_lookup = {
+        k: set(split_string_by_multi_markers(v["source_id"], [GRAPH_FIELD_SEP]))
+        for k, v in zip(all_one_hop_entities, all_one_hop_entities_data)
+        if v is not None and "source_id" in v  # Add source_id check
+    }
+
+    # Get relationship data to access retrieval counts
+    all_relationships_data = []
+    for entity_name, entity_rels in zip([e["entity_name"] for e in entities_data], relationships):
+        for rel in entity_rels:
+            rel_data = await knowledge_graph_inst.get_edge(entity_name, rel[1], "rel")
+            if rel_data:
+                all_relationships_data.append({
+                    "src": entity_name,
+                    "tgt": rel[1],
+                    "retrieval_count": rel_data.get("retrieval_count", 0)
+                })
+
+    all_text_units_lookup = {}
+    tasks = []
+    for index, (this_text_units, this_relationships) in enumerate(zip(text_units, relationships)):
+        for c_id in this_text_units:
+            if c_id not in all_text_units_lookup:
+                tasks.append((c_id, index, this_relationships))
+
+    results = await asyncio.gather(
+        *[text_chunks_db.get_by_id(c_id) for c_id, _, _ in tasks]
+    )
+
+    for (c_id, index, this_relationships), data in zip(tasks, results):
+        all_text_units_lookup[c_id] = {
+            "data": data,
+            "order": index,
+            "relation_counts": 0,
+            "relation_retrieval_sum": 0,
+        }
+
+        # Count relationships this text unit participates in and sum their retrieval counts
+        if this_relationships:
+            for r in this_relationships:
+                # Check if the target entity exists in one-hop lookup
+                # and if the current text unit is in the target entity's one-hop lookup
+                if (
+                    r[1] in all_one_hop_text_units_lookup 
+                    and c_id in all_one_hop_text_units_lookup[r[1]]
+                ):
+                    all_text_units_lookup[c_id]["relation_counts"] += 1
+                    # Find the retrieval count for this relationship
+                    for rel_data in all_relationships_data:
+                        if (rel_data["src"] == r[0] and rel_data["tgt"] == r[1]) or (rel_data["src"] == r[1] and rel_data["tgt"] == r[0]):
+                            all_text_units_lookup[c_id]["relation_retrieval_sum"] += rel_data["retrieval_count"]
+                            break
+
+    # Filter out None values and ensure data has content
+    all_text_units = [
+        {"id": k, **v}
+        for k, v in all_text_units_lookup.items()
+        if v is not None and v.get("data") is not None and "content" in v["data"]
+    ]
+
+    if not all_text_units:
+        logger.warning("No valid text units found")
+        return []
+
+    all_text_units = sorted(
+        all_text_units, 
+        key=lambda x: (x["order"], -x["relation_counts"], -x["relation_retrieval_sum"])
+    )
+
+    all_text_units = truncate_list_by_token_size(
+        all_text_units,
+        key=lambda x: x["data"]["content"],
+        max_token_size=query_param.max_token_for_text_unit,
+    )
+
+    logger.debug(
+        f"Truncate chunks from {len(all_text_units_lookup)} to {len(all_text_units)} (max tokens:{query_param.max_token_for_text_unit})"
+    )
+
+    all_text_units = [t["data"] for t in all_text_units]
+    return all_text_units
+
+# graphloom (local)
+async def _gl_find_most_related_relations_from_entities(
+    entities_data: list[dict],
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+):
+    """Find the most related relations from entities.
+ 
+    The selection process works as follows:
+    1. Collect all relations directly associated with the input entities
+    2. Rank relations based on:
+       - Their degree (rank - number of connections in the graph)
+       - Their weight (strength of the relationship)
+       - Their retrieval_count (how often they've been retrieved)
+    3. Remove duplicate relations by keeping the highest ranked version
+    4. Truncate results to fit within token limits while preserving:
+       - Most connected relations
+       - Strongest relationships
+       - Most frequently retrieved relationships
+    5. Return sorted relations with their metadata and descriptions
+    """
+    all_related_edges = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(dp["entity_name"], "ent", "rel") for dp in entities_data]
+    )
+    all_edges = []
+    seen = set()
+
+    for this_edges in all_related_edges:
+        for e in this_edges:
+            sorted_edge = tuple(sorted(e))
+            if sorted_edge not in seen:
+                seen.add(sorted_edge)
+                all_edges.append(sorted_edge)
+
+    all_edges_pack, all_edges_degree = await asyncio.gather(
+        asyncio.gather(*[knowledge_graph_inst.get_edge(e[0], e[1], "rel") for e in all_edges]),
+        asyncio.gather(
+            *[knowledge_graph_inst.edge_degree(e[0], e[1], "rel") for e in all_edges]
+        ),
+    )
+    all_edges_data = [
+        {"src_tgt": k, "rank": d, **v}
+        for k, v, d in zip(all_edges, all_edges_pack, all_edges_degree)
+        if v is not None
+    ]
+    all_edges_data = sorted(
+        all_edges_data, 
+        key=lambda x: (x["rank"], x["weight"], x.get("retrieval_count", 0)), 
+        reverse=True
+    )
+    all_edges_data = truncate_list_by_token_size(
+        all_edges_data,
+        key=lambda x: x["description"],
+        max_token_size=query_param.max_token_for_global_context,
+    )
+
+    logger.debug(
+        f"Truncate relations from {len(all_edges)} to {len(all_edges_data)} (max tokens:{query_param.max_token_for_global_context})"
+    )
+
+    return all_edges_data
+
+# graphloom (global)
+async def _gl_find_most_related_text_units_from_themes(
+    themes_data: list[dict],
+    query_param: QueryParam,
+    text_chunks_db: BaseKVStorage,
+    knowledge_graph_inst: BaseGraphStorage,
+):
+    """Find the most related text units from themes.
+    
+    The selection process works as follows:
+    1. Collect all text units directly associated with the input themes
+    2. Gather all related entities to the themes
+    3. Find text units that are associated with all related entities
+    4. Rank text units based on:
+       - Their original order in the input themes list (preserving document context)
+       - The number of themes they participate in (more themes = higher relevance)
+       - The number of entities they participate in (more entities = higher relevance)
+       - The retrieval_count of associated themes and entities (more frequently retrieved = higher relevance)
+    5. Truncate the results to fit within token limits
+    """
+    # Get text units from themes
+    themes_text_units = [
+        split_string_by_multi_markers(t["source_id"], [GRAPH_FIELD_SEP])
+        for t in themes_data  
+    ]
+
+    # Get entities associated with themes
+    theme_entities = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(t["theme_name"], "the", "the-ent") for t in themes_data]
+    )
+    # Flatten the list of entities
+    all_entities = list(set([e[1] for edges in theme_entities for e in edges]))
+    # Get entity data
+    entities_data = await asyncio.gather(
+        *[knowledge_graph_inst.get_node(e, "ent") for e in all_entities]
+    )
+    # Create lookup for text units from entities
+    all_text_units_lookup = {}
+    
+    # Process theme text units
+    for theme_idx, theme_units in enumerate(themes_text_units):
+        theme_retrieval_count = themes_data[theme_idx].get("retrieval_count", 0)
+        for c_id in theme_units:
+            if c_id not in all_text_units_lookup:
+                all_text_units_lookup[c_id] = {
+                    "order": theme_idx,
+                    "theme_counts": 1,
+                    "entity_counts": 0,
+                    "theme_retrieval_sum": theme_retrieval_count
+                }
+            else:
+                all_text_units_lookup[c_id]["theme_counts"] += 1
+                all_text_units_lookup[c_id]["theme_retrieval_sum"] += theme_retrieval_count
+
+    # Process entity text units
+    for entity_data in entities_data:
+        if entity_data and "source_id" in entity_data:
+            entity_retrieval_count = entity_data.get("retrieval_count", 0)
+            entity_units = split_string_by_multi_markers(entity_data["source_id"], [GRAPH_FIELD_SEP])
+            for c_id in entity_units:
+                if c_id in all_text_units_lookup:
+                    all_text_units_lookup[c_id]["entity_counts"] += 1
+                    all_text_units_lookup[c_id]["entity_retrieval_sum"] = all_text_units_lookup[c_id].get("entity_retrieval_sum", 0) + entity_retrieval_count
+                else:
+                    all_text_units_lookup[c_id] = {
+                        "order": len(themes_text_units),  # Lower priority for entity-only units
+                        "theme_counts": 0,
+                        "entity_counts": 1,
+                        "theme_retrieval_sum": 0,
+                        "entity_retrieval_sum": entity_retrieval_count
+                    }
+
+    # Fetch actual text content
+    chunk_ids = list(all_text_units_lookup.keys())
+    chunks_data = await asyncio.gather(
+        *[text_chunks_db.get_by_id(c_id) for c_id in chunk_ids]
+    )
+    # Combine metadata with content
+    valid_chunks = []
+    for c_id, chunk_data in zip(chunk_ids, chunks_data):
+        if chunk_data and "content" in chunk_data:
+            metadata = all_text_units_lookup[c_id]
+            valid_chunks.append({
+                "id": c_id,
+                "data": chunk_data,
+                "order": metadata["order"],
+                "theme_counts": metadata["theme_counts"],
+                "entity_counts": metadata["entity_counts"],
+                "theme_retrieval_sum": metadata.get("theme_retrieval_sum", 0),
+                "entity_retrieval_sum": metadata.get("entity_retrieval_sum", 0)
+            })
+
+    if not valid_chunks:
+        logger.warning("No valid text chunks found")
+        return []
+
+    # Sort by:
+    # 1. Theme participation (more themes first)
+    # 2. Entity connections (more connections first)
+    # 3. Theme retrieval count (more frequently retrieved themes first)
+    # 4. Entity retrieval count (more frequently retrieved entities first)
+    # 5. Original order (earlier in document first)
+    sorted_chunks = sorted(
+        valid_chunks,
+        key=lambda x: (-x["theme_counts"], -x["entity_counts"], -x["theme_retrieval_sum"], -x["entity_retrieval_sum"], x["order"])
+    )
+    # Truncate to fit token limit
+    truncated_chunks = truncate_list_by_token_size(
+        sorted_chunks,
+        key=lambda x: x["data"]["content"],
+        max_token_size=query_param.max_token_for_text_unit
+    )
+
+    logger.debug(
+        f"Truncated chunks from {len(valid_chunks)} to {len(truncated_chunks)} "
+        f"(max tokens:{query_param.max_token_for_text_unit})"
+    )
+
+    # Return only the chunk data
+    all_text_units = [t["data"] for t in truncated_chunks]
+    return all_text_units
+
+# graphloom (global)
+async def _gl_find_most_related_entities_and_relations_from_themes(
+    themes_data: list[dict],
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+):
+    """
+    Find the most related entities and relations from themes.
+    
+    Steps:
+    1. Collect all entities from themes
+    2. Get relationships for all entities
+    3. Score entities based on:
+       - Theme participation count
+       - Entity degree (connectivity)
+       - Entity retrieval_count (how often they've been retrieved)
+    4. Score relationships based on:
+       - Strength
+       - Entity scores of source and target
+       - Relationship retrieval_count (how often they've been retrieved)
+    5. Sort entities and relationships by score
+    6. Apply token budget constraints
+    7. Truncate entity results to fit within token limits while preserving:
+       - Most connected entities
+       - Most relevant entities
+       - Most frequently retrieved entities
+    8. Truncate relation results to fit within token limits while preserving:
+       - Most connected relations
+       - Strongest relationships
+       - Most frequently retrieved relationships
+    9. Return sorted entities and relations with their metadata and descriptions
+    """
+    
+    # Get entities associated with themes
+    theme_entities = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(t["theme_name"], "the", "the-ent") for t in themes_data]
+    )
+    # Flatten the list of entities
+    all_entities = list(set([e[1] for edges in theme_entities for e in edges]))
+
+    # Get entity data and degrees
+    entities_data, entity_degrees = await asyncio.gather(
+        asyncio.gather(*[knowledge_graph_inst.get_node(e, "ent") for e in all_entities]),
+        asyncio.gather(*[knowledge_graph_inst.node_degree(e, "rel") for e in all_entities])
+    )
+    
+    # Count theme participation for each entity
+    entity_counts = defaultdict(int)
+    for sublist in theme_entities:
+        for entity in sublist:
+            entity_counts[entity] += 1
+    
+    # 2. Get relationships for all entities
+    all_related_relationships = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(e, "ent", "rel") for e in all_entities]
+    )
+    
+    # Process relationships
+    all_relationships = []
+    seen = set()
+
+    for this_relationships in all_related_relationships:
+        for e in this_relationships:
+            sorted_edge = tuple(sorted(e))
+            if sorted_edge not in seen:
+                seen.add(sorted_edge)
+                all_relationships.append(sorted_edge)
+
+    # Get relationship data and degrees
+    all_relationships_pack, all_relationships_degree = await asyncio.gather(
+        asyncio.gather(*[knowledge_graph_inst.get_edge(e[0], e[1], "rel") for e in all_relationships]),
+        asyncio.gather(*[knowledge_graph_inst.edge_degree(e[0], e[1], "rel") for e in all_relationships])
+    )
+    
+    # Combine entity data with their degrees, theme counts, and retrieval counts
+    entity_data = []
+    for entity_name, entity_info, degree in zip(all_entities, entities_data, entity_degrees):
+        if entity_info is not None:  # Check for valid entity data
+            entity_data.append({
+                "entity_name": entity_name,
+                "rank": degree,
+                "theme_count": entity_counts[entity_name],
+                "retrieval_count": entity_info.get("retrieval_count", 0),
+                "description": entity_info.get("description", ""),
+                "entity_type": entity_info.get("entity_type", "UNKNOWN"),
+                "source_id": entity_info.get("source_id", "")
+            })
+    
+    # Sort entities by rank, theme participation, and retrieval count
+    sorted_entities = sorted(
+        entity_data,
+        key=lambda x: (x["rank"], x["theme_count"], x["retrieval_count"]),
+        reverse=True
+    )
+    
+    # Filter out None values and process relationships
+    all_relationships_data = [
+        {"src_tgt": k, "rank": d, **v}
+        for k, v, d in zip(all_relationships, all_relationships_pack, all_relationships_degree)
+        if v is not None
+    ]
+    
+    # Sort relationships by rank, weight, and retrieval count
+    sorted_relationships = sorted(
+        all_relationships_data,
+        key=lambda x: (x["rank"], x.get("weight", 0), x.get("retrieval_count", 0)),
+        reverse=True
+    )
+    
+    # Truncate results
+    truncated_entities = truncate_list_by_token_size(
+        sorted_entities,
+        key=lambda x: x["description"],
+        max_token_size=query_param.max_token_for_local_context
+    )
+    
+    truncated_relationships = truncate_list_by_token_size(
+        sorted_relationships,
+        key=lambda x: x.get("description", ""),
+        max_token_size=query_param.max_token_for_global_context
+    )
+    
+    logger.debug(
+        f"Truncated entities from {len(sorted_entities)} to {len(truncated_entities)} "
+        f"(max tokens:{query_param.max_token_for_local_context})"
+    )
+    
+    logger.debug(
+        f"Truncated relationships from {len(sorted_relationships)} to {len(truncated_relationships)} "
+        f"(max tokens:{query_param.max_token_for_global_context})"
+    )
+    return truncated_entities, truncated_relationships
+
+
+async def _find_most_related_text_unit_from_entities(
+    node_datas: list[dict],
+    query_param: QueryParam,
+    text_chunks_db: BaseKVStorage,
+    knowledge_graph_inst: BaseGraphStorage,
+):
+    text_units = [
+        split_string_by_multi_markers(dp["source_id"], [GRAPH_FIELD_SEP])
+        for dp in node_datas
+    ]
+    edges = await asyncio.gather(
+        *[knowledge_graph_inst.get_node_edges(dp["entity_name"]) for dp in node_datas]
+    )
+    all_one_hop_nodes = set()
+    for this_edges in edges:
+        if not this_edges:
+            continue
+        all_one_hop_nodes.update([e[1] for e in this_edges])
+
+    all_one_hop_nodes = list(all_one_hop_nodes)
+    all_one_hop_nodes_data = await asyncio.gather(
+        *[knowledge_graph_inst.get_node(e) for e in all_one_hop_nodes]
+    )
+
+    # Add null check for node data
+    all_one_hop_text_units_lookup = {
+        k: set(split_string_by_multi_markers(v["source_id"], [GRAPH_FIELD_SEP]))
+        for k, v in zip(all_one_hop_nodes, all_one_hop_nodes_data)
+        if v is not None and "source_id" in v  # Add source_id check
+    }
+
+    all_text_units_lookup = {}
+    tasks = []
+    for index, (this_text_units, this_edges) in enumerate(zip(text_units, edges)):
+        for c_id in this_text_units:
+            if c_id not in all_text_units_lookup:
+                tasks.append((c_id, index, this_edges))
+
+    results = await asyncio.gather(
+        *[text_chunks_db.get_by_id(c_id) for c_id, _, _ in tasks]
+    )
+
+    for (c_id, index, this_edges), data in zip(tasks, results):
+        all_text_units_lookup[c_id] = {
+            "data": data,
+            "order": index,
+            "relation_counts": 0,
+        }
+
+        if this_edges:
+            for e in this_edges:
+                if (
+                    e[1] in all_one_hop_text_units_lookup
+                    and c_id in all_one_hop_text_units_lookup[e[1]]
+                ):
+                    all_text_units_lookup[c_id]["relation_counts"] += 1
+
+    # Filter out None values and ensure data has content
+    all_text_units = [
+        {"id": k, **v}
+        for k, v in all_text_units_lookup.items()
+        if v is not None and v.get("data") is not None and "content" in v["data"]
+    ]
+
+    if not all_text_units:
+        logger.warning("No valid text units found")
+        return []
+
+    all_text_units = sorted(
+        all_text_units, key=lambda x: (x["order"], -x["relation_counts"])
+    )
+
+    all_text_units = truncate_list_by_token_size(
+        all_text_units,
+        key=lambda x: x["data"]["content"],
+        max_token_size=query_param.max_token_for_text_unit,
+    )
+
+    logger.debug(
+        f"Truncate chunks from {len(all_text_units_lookup)} to {len(all_text_units)} (max tokens:{query_param.max_token_for_text_unit})"
+    )
+
+    all_text_units = [t["data"] for t in all_text_units]
+    return all_text_units
 
 async def _find_most_related_edges_from_entities(
     node_datas: list[dict],
@@ -3494,6 +5184,141 @@ async def _find_most_related_edges_from_entities(
     )
 
     return all_edges_data
+
+# graphloom
+async def _get_global_data(
+    keywords,
+    knowledge_graph_inst: BaseGraphStorage,
+    themes_vdb: BaseVectorStorage,
+    text_chunks_db: BaseKVStorage,
+    query_param: QueryParam,
+):
+    # get similar themes
+    logger.info(
+        f"Query nodes: {keywords}, top_k: {query_param.top_k}, cosine: {themes_vdb.cosine_better_than_threshold}"
+    )
+    results = await themes_vdb.query(keywords, top_k=query_param.top_k)
+    if not len(results):
+        return "", "", "", ""
+    
+    # get theme information
+    themes_data, theme_degrees = await asyncio.gather(
+        asyncio.gather(
+            *[knowledge_graph_inst.get_node(r["theme_name"], "the") for r in results]
+        ),
+        asyncio.gather(
+            *[knowledge_graph_inst.node_degree(r["theme_name"], "the-ent") for r in results]
+        ),
+    )
+
+    if not all([n is not None for n in themes_data]): 
+        logger.warning("Some themes are missing, maybe the storage is damaged")
+
+    themes_data = [
+        {**n, "theme_name": k["theme_name"], "rank": d}
+        for k, n, d in zip(results, themes_data, theme_degrees)
+        if n is not None
+    ]
+
+    # Increment retrieval counts for themes
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_retrieval_count(t["theme_name"], "the")
+        for t in themes_data
+    ])
+
+    # get text chunks, entities, and relations associated with themes
+    use_text_units, (use_entities, use_relations) = await asyncio.gather(
+        _gl_find_most_related_text_units_from_themes(
+            themes_data, query_param, text_chunks_db, knowledge_graph_inst
+        ),
+        _gl_find_most_related_entities_and_relations_from_themes(
+            themes_data, query_param, knowledge_graph_inst
+        )
+    )
+    themes_data = truncate_list_by_token_size(
+        themes_data,
+        key=lambda x: x["description"],
+        max_token_size=query_param.max_token_for_local_context,
+    )
+
+     # Increment retrieval counts for entities and relationships 
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_retrieval_count(e["entity_name"], "ent")
+        for e in use_entities
+    ])
+    await asyncio.gather(*[
+        knowledge_graph_inst.increment_edge_retrieval_count(r["src_tgt"][0], r["src_tgt"][1], "rel")
+        for r in use_relations
+    ])
+
+    logger.info(
+        f"Global query uses {len(themes_data)} themes, {len(use_entities)} entities, {len(use_relations)} relations, {len(use_text_units)} chunks"
+    )
+
+    # build prompt
+    entites_section_list = [["id", "entity", "type", "description", "rank"]]
+    for i, e in enumerate(use_entities):
+        entites_section_list.append(
+            [
+                i,
+                e["entity_name"],
+                e.get("entity_type", "UNKNOWN"),
+                e.get("description", "UNKNOWN"),
+                e["rank"],
+            ]
+        )
+    entities_context = list_of_list_to_csv(entites_section_list)
+
+    relations_section_list = [
+        [
+            "id",
+            "source",
+            "target",
+            "description",
+            "keywords",
+            "weight",
+            "rank",
+            "created_at",
+        ]
+    ]
+
+    for i, e in enumerate(use_relations):
+        created_at = e.get("created_at", "UNKNOWN")
+        # Convert timestamp to readable format
+        if isinstance(created_at, (int, float)):
+            created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+        relations_section_list.append(
+            [
+                i,
+                e["src_tgt"][0],
+                e["src_tgt"][1],
+                e["description"],
+                e["keywords"],
+                e["weight"],
+                e["rank"],
+                created_at,
+            ]
+        )
+    relations_context = list_of_list_to_csv(relations_section_list)
+
+    themes_section_list = [["id", "theme", "description", "rank"]]
+    for i, t in enumerate(themes_data):
+        themes_section_list.append(
+            [
+                i,
+                t["theme_name"],
+                t.get("description", "UNKNOWN"),
+                t["rank"],
+            ]
+        )
+    themes_context = list_of_list_to_csv(themes_section_list)
+    
+    text_units_section_list = [["id", "content"]]
+    for i, t in enumerate(use_text_units):
+        text_units_section_list.append([i, t["content"]])
+    text_units_context = list_of_list_to_csv(text_units_section_list)
+
+    return themes_context, entities_context, relations_context, text_units_context
 
 
 async def _find_related_text_unit_from_entities(

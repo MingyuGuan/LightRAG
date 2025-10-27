@@ -134,6 +134,18 @@ class JsonKVStorage(BaseKVStorage):
                 else:
                     results.append(None)
             return results
+        # impl prior merge
+        # return [
+        #     (
+        #         {k: v for k, v in self._data[id].items()}
+        #         if self._data.get(id, None)
+        #         else None
+        #     )
+        #     for id in ids
+        # ]
+        
+    async def get_all(self) -> dict[str, Any]:
+        return self._data
 
     async def filter_keys(self, keys: set[str]) -> set[str]:
         async with self._storage_lock:

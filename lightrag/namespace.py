@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+def make_namespace(prefix: str, base_namespace: str):
+    return prefix + base_namespace
 
 # All namespace should not be changed
 class NameSpace:
@@ -14,6 +16,11 @@ class NameSpace:
     VECTOR_STORE_ENTITIES = "entities"
     VECTOR_STORE_RELATIONSHIPS = "relationships"
     VECTOR_STORE_CHUNKS = "chunks"
+
+    # graphloom
+    VECTOR_STORE_THEMES = "themes"
+    VECTOR_STORE_THEME_HIERARCHIES = "theme_hierarchies"
+    KV_STORE_SUMMARIES = "summaries"
 
     GRAPH_STORE_CHUNK_ENTITY_RELATION = "chunk_entity_relation"
 

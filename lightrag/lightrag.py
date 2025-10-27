@@ -45,6 +45,8 @@ from lightrag.constants import (
     DEFAULT_EMBEDDING_TIMEOUT,
 )
 from lightrag.utils import get_env_value
+from typing import Any, AsyncIterator, Callable, Iterator, cast, final
+import atexit
 
 from lightrag.kg import (
     STORAGES,
@@ -73,12 +75,18 @@ from lightrag.base import (
     OllamaServerInfos,
     QueryResult,
 )
-from lightrag.namespace import NameSpace
+from lightrag.namespace import NameSpace, make_namespace
 from lightrag.operate import (
     chunking_by_token_size,
     extract_entities,
     merge_nodes_and_edges,
     kg_query,
+    extract_gl_kg,  # graphloom
+    extract_keywords_only,
+    kg_query,
+    gl_kg_query,  # graphloom
+    # kg_query_with_keywords, <-- removed in upstream after merge
+    # mix_kg_vector_query,    <-- removed in upstream after merge
     naive_query,
     _rebuild_knowledge_from_chunks,
 )
@@ -384,6 +392,15 @@ class LightRAG:
 
     _storages_status: StoragesStatus = field(default=StoragesStatus.NOT_CREATED)
 
+    graphloom: bool = field(default=False)
+    """Controls whether to enable GraphLoom features for theme and theme hierarchy extraction."""
+
+    graphloom_summary: bool = field(default=False)
+    """Controls whether to enable GraphLoom summary features for keyword extraction."""
+
+    reset_retrieval_count: bool = field(default=False)
+    """If True, resets all retrieval counts to 0 during initialization."""
+
     def __post_init__(self):
         from lightrag.kg.shared_storage import (
             initialize_share_data,
@@ -414,6 +431,18 @@ class LightRAG:
         if not os.path.exists(self.working_dir):
             logger.info(f"Creating working directory {self.working_dir}")
             os.makedirs(self.working_dir)
+
+        # Register cleanup function
+        atexit.register(self._cleanup)
+
+        # Mingyu: graphloom only support NetworkXHeteroStorage currently
+        if self.graphloom:
+            if self.graph_storage == "NetworkXHeteroStorage":
+                logger.info("GraphLoom is enabled, using NetworkXHeteroStorage")
+            else:
+                raise ValueError(
+                    "GraphLoom is enabled, but the graph storage is not NetworkXHeteroStorage"
+                )
 
         # Verify storage implementation compatibility and environment variables
         storage_configs = [
@@ -546,6 +575,29 @@ class LightRAG:
             embedding_func=self.embedding_func,
             meta_fields={"src_id", "tgt_id", "source_id", "content", "file_path"},
         )
+
+        if self.graphloom:
+            self.themes_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_THEMES
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"theme_name"},
+            )
+            self.theme_hierarchies_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.VECTOR_STORE_THEME_HIERARCHIES
+                ),
+                embedding_func=self.embedding_func,
+                meta_fields={"parent_name", "child_name"},
+            )
+            self.summaries_kvs: BaseKVStorage = self.key_string_value_json_storage_cls(  # type: ignore
+                namespace=make_namespace(
+                    self.namespace_prefix, NameSpace.KV_STORE_SUMMARIES
+                ),
+                embedding_func=self.embedding_func,
+            )
+
         self.chunks_vdb: BaseVectorStorage = self.vector_db_storage_cls(  # type: ignore
             namespace=NameSpace.VECTOR_STORE_CHUNKS,
             workspace=self.workspace,
@@ -579,10 +631,37 @@ class LightRAG:
 
         self._storages_status = StoragesStatus.CREATED
 
+        # Reset retrieval counts
+        if self.reset_retrieval_count:
+            loop = always_get_an_event_loop()
+            loop.run_until_complete(self._reset_retrieval_counts())
+
+    ### removed upstream start
+    # # Initialize storages <--- lightrag removed auto-storage management upstream
+
+    # if self.auto_manage_storages_states:
+    #     loop = always_get_an_event_loop()
+    #     loop.run_until_complete(self.initialize_storages())
+    # def _cleanup(self):
+    #     """Cleanup function registered with atexit to ensure storages are finalized."""
+    #     try:
+    #         if self.auto_manage_storages_states:
+    #             loop = always_get_an_event_loop()
+    #             loop.run_until_complete(self.finalize_storages())
+    #     except Exception as e:
+    #         logger.error(f"Error during cleanup: {str(e)}")
+
+    # def __del__(self):
+    #     # Finalize storages
+    #     if self.auto_manage_storages_states:
+    #         loop = always_get_an_event_loop()
+    #         loop.run_until_complete(self.finalize_storages())
+    ### removed upstream end
+
     async def initialize_storages(self):
         """Storage initialization must be called one by one to prevent deadlock"""
         if self._storages_status == StoragesStatus.CREATED:
-            for storage in (
+            storages = [
                 self.full_docs,
                 self.text_chunks,
                 self.full_entities,
@@ -593,7 +672,14 @@ class LightRAG:
                 self.chunk_entity_relation_graph,
                 self.llm_response_cache,
                 self.doc_status,
-            ):
+            ]
+
+            # Add theme storages if graphloom is enabled
+            if self.graphloom:
+                storages.extend([self.themes_vdb, self.theme_hierarchies_vdb])
+                storages.extend([self.summaries_kvs])
+
+            for storage in storages:
                 if storage:
                     # logger.debug(f"Initializing storage: {storage}")
                     await storage.initialize()
@@ -616,6 +702,16 @@ class LightRAG:
                 ("llm_response_cache", self.llm_response_cache),
                 ("doc_status", self.doc_status),
             ]
+
+            # Add theme storages if graphloom is enabled
+            if self.graphloom:
+                storages.extend(
+                    [
+                        ("themes_vdb", self.themes_vdb),
+                        ("theme_hierarchies_vdb", self.theme_hierarchies_vdb),
+                    ]
+                )
+                storages.extend([("summaries_kvs", self.summaries_kvs)])
 
             # Finalize each storage individually to ensure one failure doesn't prevent others from closing
             successful_finalizations = []
@@ -1810,14 +1906,27 @@ class LightRAG:
         self, chunk: dict[str, Any], pipeline_status=None, pipeline_status_lock=None
     ) -> list:
         try:
-            chunk_results = await extract_entities(
-                chunk,
-                global_config=asdict(self),
-                pipeline_status=pipeline_status,
-                pipeline_status_lock=pipeline_status_lock,
-                llm_response_cache=self.llm_response_cache,
-                text_chunks_storage=self.text_chunks,
-            )
+            if self.graphloom:
+                chunk_results = await extract_gl_kg(
+                    chunks=chunk,
+                    knowledge_graph_inst=self.chunk_entity_relation_graph,
+                    entity_vdb=self.entities_vdb,
+                    relationships_vdb=self.relationships_vdb,
+                    theme_vdb=self.themes_vdb,
+                    theme_hierarchy_vdb=self.theme_hierarchies_vdb,
+                    summaries_kvs=self.summaries_kvs,
+                    llm_response_cache=self.llm_response_cache,
+                    global_config=asdict(self),
+                )
+            else:
+                chunk_results = await extract_entities(
+                    chunk,
+                    global_config=asdict(self),
+                    pipeline_status=pipeline_status,
+                    pipeline_status_lock=pipeline_status_lock,
+                    llm_response_cache=self.llm_response_cache,
+                    text_chunks_storage=self.text_chunks,
+                )
             return chunk_results
         except Exception as e:
             error_msg = f"Failed to extract entities and relationships: {str(e)}"
@@ -1846,6 +1955,11 @@ class LightRAG:
             ]
             if storage_inst is not None
         ]
+        if self.graphloom:
+            tasks.append(self.themes_vdb.index_done_callback())
+            tasks.append(self.theme_hierarchies_vdb.index_done_callback())
+            tasks.append(self.summaries_kvs.index_done_callback())
+
         await asyncio.gather(*tasks)
 
         log_message = "In memory DB persist to disk"
@@ -1862,6 +1976,7 @@ class LightRAG:
         loop = always_get_an_event_loop()
         loop.run_until_complete(self.ainsert_custom_kg(custom_kg, full_doc_id))
 
+    # Mingyu: Not Implemented for GraphLoom
     async def ainsert_custom_kg(
         self,
         custom_kg: dict[str, Any],
@@ -2333,18 +2448,46 @@ class LightRAG:
             query_result = None
 
             if param.mode in ["local", "global", "hybrid", "mix"]:
-                query_result = await kg_query(
-                    query.strip(),
-                    self.chunk_entity_relation_graph,
-                    self.entities_vdb,
-                    self.relationships_vdb,
-                    self.text_chunks,
-                    param,
-                    global_config,
-                    hashing_kv=self.llm_response_cache,
-                    system_prompt=system_prompt,
-                    chunks_vdb=self.chunks_vdb,
-                )
+                if param.mode in ["mix"] or not self.graphloom:
+                    query_result = await kg_query(
+                        query.strip(),
+                        self.chunk_entity_relation_graph,
+                        self.entities_vdb,
+                        self.relationships_vdb,
+                        self.text_chunks,
+                        param,
+                        global_config,
+                        hashing_kv=self.llm_response_cache,
+                        system_prompt=system_prompt,
+                        chunks_vdb=self.chunks_vdb,
+                    )
+
+                elif self.graphloom:
+                    query_result = await gl_kg_query(
+                        query,
+                        self.chunk_entity_relation_graph,
+                        self.entities_vdb,
+                        self.relationships_vdb,
+                        self.themes_vdb,
+                        self.theme_hierarchies_vdb,
+                        self.summaries_kvs,
+                        self.text_chunks,
+                        param,
+                        asdict(self),
+                        hashing_kv=self.llm_response_cache
+                        if self.llm_response_cache
+                        and hasattr(self.llm_response_cache, "global_config")
+                        else self.key_string_value_json_storage_cls(
+                            namespace=make_namespace(
+                                self.namespace_prefix,
+                                NameSpace.KV_STORE_LLM_RESPONSE_CACHE,
+                            ),
+                            global_config=asdict(self),
+                            embedding_func=self.embedding_func,
+                        ),
+                        system_prompt=system_prompt,
+                    )
+
             elif param.mode == "naive":
                 query_result = await naive_query(
                     query.strip(),
@@ -2466,10 +2609,16 @@ class LightRAG:
     async def _query_done(self):
         await self.llm_response_cache.index_done_callback()
 
+    ### prior to rebase
+    # Mingyu: Not Implemented for GraphLoom
+    # def delete_by_entity(self, entity_name: str) -> None:
+    #     loop = always_get_an_event_loop()
+    #     return loop.run_until_complete(self.adelete_by_entity(entity_name))
+
+    #     This method clears all cached LLM responses regardless of mode.
+
     async def aclear_cache(self) -> None:
         """Clear all cache data from the LLM response cache storage.
-
-        This method clears all cached LLM responses regardless of mode.
 
         Example:
             # Clear all cache
@@ -2505,6 +2654,11 @@ class LightRAG:
             Dict with document id is keys and document status is values
         """
         return await self.doc_status.get_docs_by_status(status)
+
+    # Prior to rebase
+    # # Mingyu: Not Implemented for GraphLoom
+    # async def adelete_by_doc_id(self, doc_id: str) -> None:
+    #     """Delete a document and all its related data
 
     async def aget_docs_by_ids(
         self, ids: str | list[str]
@@ -3044,6 +3198,7 @@ class LightRAG:
             self.entities_vdb,
             entity_name,
             include_vector_data,
+            self.graphloom
         )
 
     async def get_relation_info(
@@ -3084,6 +3239,7 @@ class LightRAG:
             entity_name,
             updated_data,
             allow_rename,
+            self.graphloom
         )
 
     def edit_entity(
@@ -3301,3 +3457,42 @@ class LightRAG:
         loop.run_until_complete(
             self.aexport_data(output_path, file_format, include_vector_data)
         )
+
+    async def _reset_retrieval_counts(self) -> None:
+        """Reset all retrieval counts to 0 in the graph storage."""
+        if not isinstance(self.chunk_entity_relation_graph, BaseGraphStorage):
+            logger.warning("Graph storage does not support retrieval count reset")
+            return
+
+        try:
+            # Reset node retrieval counts
+            for node in self.chunk_entity_relation_graph._graph.nodes():
+                logger.info(f"Reset retrieval count for node: {node}")
+                if (
+                    "retrieval_count"
+                    in self.chunk_entity_relation_graph._graph.nodes[node]
+                ):
+                    logger.info(
+                        f"Retrieval count for node: {node} is {self.chunk_entity_relation_graph._graph.nodes[node]['retrieval_count']}"
+                    )
+                    self.chunk_entity_relation_graph._graph.nodes[node][
+                        "retrieval_count"
+                    ] = 0
+
+            # Reset edge retrieval counts
+            for edge in self.chunk_entity_relation_graph._graph.edges():
+                logger.info(f"Reset retrieval count for edge: {edge}")
+                if (
+                    "retrieval_count"
+                    in self.chunk_entity_relation_graph._graph.edges[edge]
+                ):
+                    logger.info(
+                        f"Retrieval count for edge: {edge} is {self.chunk_entity_relation_graph._graph.edges[edge]['retrieval_count']}"
+                    )
+                    self.chunk_entity_relation_graph._graph.edges[edge][
+                        "retrieval_count"
+                    ] = 0
+
+            logger.info("Successfully reset all retrieval counts to 0")
+        except Exception as e:
+            logger.error(f"Error resetting retrieval counts: {e}")

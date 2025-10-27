@@ -1,6 +1,7 @@
 from __future__ import annotations
 import weakref
 
+import io
 import asyncio
 import html
 import csv
@@ -18,6 +19,7 @@ from hashlib import md5
 from typing import Any, Protocol, Callable, TYPE_CHECKING, List, Optional
 import numpy as np
 from dotenv import load_dotenv
+import tiktoken
 
 from lightrag.constants import (
     DEFAULT_LOG_MAX_BYTES,
@@ -56,7 +58,87 @@ except ImportError:
     logger.warning(
         "pypinyin is not installed. Chinese pinyin sorting will use simple string sorting."
     )
+    
 
+def encode_string_by_tiktoken(content: str, model_name: str = "gpt-4o"):
+    global ENCODER
+    if ENCODER is None:
+        ENCODER = tiktoken.encoding_for_model(model_name)
+    tokens = ENCODER.encode(content)
+    return tokens
+
+def list_of_list_to_csv(data: list[list[str]]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(
+        output,
+        quoting=csv.QUOTE_ALL,  # Quote all fields
+        escapechar="\\",  # Use backslash as escape character
+        quotechar='"',  # Use double quotes
+        lineterminator="\n",  # Explicit line terminator
+    )
+    writer.writerows(data)
+    return output.getvalue()
+
+def get_conversation_turns(
+    conversation_history: list[dict[str, Any]], num_turns: int
+) -> str:
+    """
+    Process conversation history to get the specified number of complete turns.
+
+    Args:
+        conversation_history: List of conversation messages in chronological order
+        num_turns: Number of complete turns to include
+
+    Returns:
+        Formatted string of the conversation history
+    """
+    # Check if num_turns is valid
+    if num_turns <= 0:
+        return ""
+
+    # Group messages into turns
+    turns: list[list[dict[str, Any]]] = []
+    messages: list[dict[str, Any]] = []
+
+    # First, filter out keyword extraction messages
+    for msg in conversation_history:
+        if msg["role"] == "assistant" and (
+            msg["content"].startswith('{ "high_level_keywords"')
+            or msg["content"].startswith("{'high_level_keywords'")
+        ):
+            continue
+        messages.append(msg)
+
+    # Then process messages in chronological order
+    i = 0
+    while i < len(messages) - 1:
+        msg1 = messages[i]
+        msg2 = messages[i + 1]
+
+        # Check if we have a user-assistant or assistant-user pair
+        if (msg1["role"] == "user" and msg2["role"] == "assistant") or (
+            msg1["role"] == "assistant" and msg2["role"] == "user"
+        ):
+            # Always put user message first in the turn
+            if msg1["role"] == "assistant":
+                turn = [msg2, msg1]  # user, assistant
+            else:
+                turn = [msg1, msg2]  # user, assistant
+            turns.append(turn)
+        i += 2
+
+    # Keep only the most recent num_turns
+    if len(turns) > num_turns:
+        turns = turns[-num_turns:]
+
+    # Format the turns into a string
+    formatted_turns: list[str] = []
+    for turn in turns:
+        formatted_turns.extend(
+            [f"user: {turn[0]['content']}", f"assistant: {turn[1]['content']}"]
+        )
+
+    return "\n".join(formatted_turns)
 
 async def safe_vdb_operation_with_exception(
     operation: Callable,
@@ -2463,6 +2545,62 @@ async def process_chunks_unified(
         final_chunks.append(chunk_with_id)
 
     return final_chunks
+
+def csv_string_to_list(csv_string: str) -> list[list[str]]:
+    # Clean the string by removing NUL characters
+    cleaned_string = csv_string.replace("\0", "")
+
+    output = io.StringIO(cleaned_string)
+    reader = csv.reader(
+        output,
+        quoting=csv.QUOTE_ALL,  # Match the writer configuration
+        escapechar="\\",  # Use backslash as escape character
+        quotechar='"',  # Use double quotes
+    )
+
+    try:
+        return [row for row in reader]
+    except csv.Error as e:
+        raise ValueError(f"Failed to parse CSV string: {str(e)}")
+    finally:
+        output.close()
+
+def process_combine_contexts(hl: str, ll: str):
+    header = None
+    list_hl = csv_string_to_list(hl.strip())
+    list_ll = csv_string_to_list(ll.strip())
+
+    if list_hl:
+        header = list_hl[0]
+        list_hl = list_hl[1:]
+    if list_ll:
+        header = list_ll[0]
+        list_ll = list_ll[1:]
+    if header is None:
+        return ""
+
+    if list_hl:
+        list_hl = [",".join(item[1:]) for item in list_hl if item]
+    if list_ll:
+        list_ll = [",".join(item[1:]) for item in list_ll if item]
+
+    combined_sources = []
+    seen = set()
+
+    for item in list_hl + list_ll:
+        if item and item not in seen:
+            combined_sources.append(item)
+            seen.add(item)
+
+    combined_sources_result = [",\t".join(header)]
+
+    for i, item in enumerate(combined_sources, start=1):
+        combined_sources_result.append(f"{i},\t{item}")
+
+    combined_sources_result = "\n".join(combined_sources_result)
+
+    return combined_sources_result
+
 
 
 def build_file_path(already_file_paths, data_list, target):

@@ -1,0 +1,50 @@
+[
+    {
+        "name": "GraphLoom Full",
+        "graphloom_config": {
+            "gl_enabled": true,
+            "gl_summ_enabled": true
+        },
+        "test_config": {
+            "benchmark": "squality",
+            "input_file_path": "squality/data/v1-3/txt/test.jsonl"
+        },
+        "model_config": {
+            "evaluation_model": "openai/gpt-5-nano",
+            "inference_model": "anthropic/claude-3-5-haiku-20241022",
+            "embedding_model": "text-embedding-3-small"
+        }
+    },
+    {
+        "name": "Base LightRAG",
+        "graphloom_config": {
+            "gl_enabled": false,
+            "gl_summ_enabled": false
+        },
+        "test_config": {
+            "benchmark": "squality",
+            "input_file_path": "squality/data/v1-3/txt/test.jsonl"
+        },
+        "model_config": {
+            "evaluation_model": "openai/gpt-5-nano",
+            "inference_model": "anthropic/claude-3-5-haiku-20241022",
+            "embedding_model": "text-embedding-3-small"
+        }
+    },
+    {
+        "name": "GraphLoom No Summarization",
+        "graphloom_config": {
+            "gl_enabled": true,
+            "gl_summ_enabled": false
+        },
+        "test_config": {
+            "benchmark": "squality",
+            "input_file_path": "squality/data/v1-3/txt/test.jsonl"
+        },
+        "model_config": {
+            "evaluation_model": "openai/gpt-5-nano",
+            "inference_model": "anthropic/claude-3-5-haiku-20241022",
+            "embedding_model": "text-embedding-3-small"
+        }
+    }
+]

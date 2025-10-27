@@ -1,0 +1,17 @@
+{
+    "squality_base-lightrag_openai-gpt-5-nano_openai-gpt-4o-mini_text-embedding-3-small": {
+        "comprehensiveness": 6.172115384615385,
+        "diversity": 4.428846153846154,
+        "empowerment": 4.185576923076923
+    },
+    "squality_graphloom-no-summarization_openai-gpt-5-nano_openai-gpt-4o-mini_text-embedding-3-small": {
+        "comprehensiveness": 67.80288461538461,
+        "diversity": 74.31634615384615,
+        "empowerment": 72.43173076923077
+    },
+    "squality_graphloom-full_openai-gpt-5-nano_openai-gpt-4o-mini_text-embedding-3-small": {
+        "comprehensiveness": 70.01634615384616,
+        "diversity": 76.07307692307693,
+        "empowerment": 74.54326923076923
+    }
+}

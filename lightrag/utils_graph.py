@@ -167,6 +167,7 @@ async def aedit_entity(
     entity_name: str,
     updated_data: dict[str, str],
     allow_rename: bool = True,
+    graphloom_enabled: bool = False
 ) -> dict[str, Any]:
     """Asynchronously edit entity information.
 
@@ -238,9 +239,16 @@ async def aedit_entity(
                 if edges:
                     # Recreate edges for the new entity
                     for source, target in edges:
-                        edge_data = await chunk_entity_relation_graph.get_edge(
-                            source, target
-                        )
+                        
+                        if graphloom_enabled:
+                            edge_data = await chunk_entity_relation_graph.get_entity(
+                                source, target
+                            )
+                        else:
+                            edge_data = await chunk_entity_relation_graph.get_edge(
+                                source, target
+                            )
+
                         if edge_data:
                             relations_to_delete.append(
                                 compute_mdhash_id(source + target, prefix="rel-")
@@ -1065,11 +1073,27 @@ async def get_entity_info(
     entities_vdb,
     entity_name: str,
     include_vector_data: bool = False,
+    graphloom_enabled: bool = False,
 ) -> dict[str, str | None | dict[str, str]]:
-    """Get detailed information of an entity"""
+    """Get detailed information of an entity
+    
+    Args:
+        entity_name: Entity name (no need for quotes)
+        include_vector_data: Whether to include data from the vector database
+
+    Returns:
+        dict: A dictionary containing entity information, including:
+            - entity_name: Entity name
+            - source_id: Source document ID
+            - graph_data: Complete node data from the graph database
+            - vector_data: (optional) Data from the vector database
+    """
 
     # Get information from the graph
-    node_data = await chunk_entity_relation_graph.get_node(entity_name)
+    if graphloom_enabled:
+        node_data = await chunk_entity_relation_graph.get_entity(entity_name)
+    else:
+        node_data = await chunk_entity_relation_graph.get_node(entity_name)
     source_id = node_data.get("source_id") if node_data else None
 
     result: dict[str, str | None | dict[str, str]] = {
